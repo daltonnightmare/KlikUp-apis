@@ -1,0 +1,134 @@
+<!-- services/email/templates/facture.html -->
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Facture</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f4;
+        }
+        .container {
+            max-width: 600px;
+            margin: 20px auto;
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header {
+            background: linear-gradient(135deg, #141E30 0%, #243B55 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+        }
+        .content {
+            padding: 30px;
+        }
+        .invoice-box {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .invoice-ref {
+            font-size: 18px;
+            color: #243B55;
+            margin-bottom: 15px;
+        }
+        .button {
+            display: inline-block;
+            padding: 12px 30px;
+            background: linear-gradient(135deg, #141E30 0%, #243B55 100%);
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        .footer {
+            background: #f8f9fa;
+            padding: 20px;
+            text-align: center;
+            font-size: 14px;
+            color: #6c757d;
+            border-top: 1px solid #dee2e6;
+        }
+        .invoice-details {
+            margin: 20px 0;
+        }
+        .invoice-details table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .invoice-details td {
+            padding: 8px;
+        }
+        .invoice-details .label {
+            font-weight: bold;
+            color: #666;
+        }
+        .total-amount {
+            font-size: 20px;
+            font-weight: bold;
+            color: #243B55;
+            text-align: right;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🧾 Votre facture</h1>
+        </div>
+        
+        <div class="content">
+            <p>Bonjour <strong>{{prenom}}</strong>,</p>
+            
+            <p>Votre facture pour la commande #{{commandeRef}} est disponible.</p>
+            
+            <div class="invoice-box">
+                <div class="invoice-ref">Facture #FAC-{{commandeRef}}</div>
+                
+                <div class="invoice-details">
+                    <table>
+                        <tr>
+                            <td class="label">Date d'émission :</td>
+                            <td>{{date}}</td>
+                        </tr>
+                        <tr>
+                            <td class="label">Commande :</td>
+                            <td>#{{commandeRef}}</td>
+                        </tr>
+                        <tr>
+                            <td class="label">Montant total :</td>
+                            <td class="total-amount">{{montant}}</td>
+                        </tr>
+                    </table>
+                </div>
+                
+                <div style="text-align: center;">
+                    <a href="{{factureUrl}}" class="button" target="_blank">📄 Télécharger la facture (PDF)</a>
+                </div>
+            </div>
+            
+            <p>Cette facture est également disponible dans votre espace client.</p>
+            
+            <p>Pour toute question concernant cette facture, contactez notre service client.</p>
+        </div>
+        
+        <div class="footer">
+            <p>© {{year}} ProjetBus. Tous droits réservés.</p>
+        </div>
+    </div>
+</body>
+</html>

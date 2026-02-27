@@ -1,0 +1,141 @@
+<!-- services/email/templates/commande-confirmee.html -->
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Confirmation de commande</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f4;
+        }
+        .container {
+            max-width: 600px;
+            margin: 20px auto;
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+        }
+        .content {
+            padding: 30px;
+        }
+        .order-details {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .order-ref {
+            font-size: 20px;
+            font-weight: bold;
+            color: #11998e;
+            text-align: center;
+            padding: 10px;
+            background: white;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .order-items {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .order-items th {
+            background: #11998e;
+            color: white;
+            padding: 10px;
+            text-align: left;
+        }
+        .order-items td {
+            padding: 10px;
+            border-bottom: 1px solid #dee2e6;
+        }
+        .total {
+            font-size: 18px;
+            font-weight: bold;
+            text-align: right;
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 2px solid #dee2e6;
+        }
+        .footer {
+            background: #f8f9fa;
+            padding: 20px;
+            text-align: center;
+            font-size: 14px;
+            color: #6c757d;
+            border-top: 1px solid #dee2e6;
+        }
+        .track-button {
+            display: inline-block;
+            padding: 12px 30px;
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>✅ Commande confirmée !</h1>
+        </div>
+        
+        <div class="content">
+            <p>Bonjour <strong>{{prenom}}</strong>,</p>
+            
+            <p>Merci pour votre commande ! Nous vous confirmons qu'elle a bien été enregistrée.</p>
+            
+            <div class="order-details">
+                <div class="order-ref">Commande #{{commandeRef}}</div>
+                
+                <p><strong>Date :</strong> {{date}}</p>
+                
+                <table class="order-items">
+                    <thead>
+                        <tr>
+                            <th>Article</th>
+                            <th>Quantité</th>
+                            <th>Prix</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- Les articles seront insérés ici -->
+                    </tbody>
+                </table>
+                
+                <div class="total">
+                    Total : {{total}}
+                </div>
+            </div>
+            
+            <div style="text-align: center;">
+                <a href="#" class="track-button">Suivre ma commande</a>
+            </div>
+            
+            <p>Nous vous tiendrons informé de l'avancement de votre commande par email et notifications.</p>
+        </div>
+        
+        <div class="footer">
+            <p>© {{year}} KlikUp. Tous droits réservés.</p>
+        </div>
+    </div>
+</body>
+</html>

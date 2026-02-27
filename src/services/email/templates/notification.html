@@ -1,0 +1,103 @@
+<!-- services/email/templates/notification.html -->
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Notification</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f4;
+        }
+        .container {
+            max-width: 600px;
+            margin: 20px auto;
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header {
+            background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+        .content {
+            padding: 30px;
+        }
+        .notification-box {
+            background: #f8f9fa;
+            border-left: 4px solid #fa709a;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 0 5px 5px 0;
+        }
+        .notification-title {
+            font-size: 18px;
+            font-weight: bold;
+            color: #fa709a;
+            margin-bottom: 10px;
+        }
+        .notification-message {
+            font-size: 16px;
+            margin-bottom: 15px;
+        }
+        .button {
+            display: inline-block;
+            padding: 10px 20px;
+            background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        .footer {
+            background: #f8f9fa;
+            padding: 20px;
+            text-align: center;
+            font-size: 14px;
+            color: #6c757d;
+            border-top: 1px solid #dee2e6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔔 Nouvelle notification</h1>
+        </div>
+        
+        <div class="content">
+            <p>Bonjour <strong>{{prenom}}</strong>,</p>
+            
+            <div class="notification-box">
+                <div class="notification-title">{{titre}}</div>
+                <div class="notification-message">{{message}}</div>
+                
+                {{#if actionUrl}}
+                <div style="text-align: center;">
+                    <a href="{{actionUrl}}" class="button">Voir les détails</a>
+                </div>
+                {{/if}}
+            </div>
+            
+            <p>Pour gérer vos préférences de notification, connectez-vous à votre compte.</p>
+        </div>
+        
+        <div class="footer">
+            <p>© {{year}} KlikUp. Tous droits réservés.</p>
+            <p><a href="#">Gérer mes notifications</a></p>
+        </div>
+    </div>
+</body>
+</html>

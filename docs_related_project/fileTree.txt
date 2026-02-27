@@ -1,0 +1,385 @@
+mon-projet-api/
+├── src/
+│   ├── configuration/
+│   │   ├── database.js             # Configuration PostgreSQL (pool de connexions)
+│   │   ├── env.js                       # Variables d'environnement
+│   │   ├── constants.js                  # Constantes globales (ENUMs, statuts)
+│   │   ├── logger.js                     # Configuration des logs
+|   |   ├── cache.js
+|   |   ├── queue.js
+|   |   ├── storage.js
+|   |   └── redis.js
+|   |
+|   |
+│   ├── models/                           # Modèles (représentation des tables)
+│   │   ├── index.js                       # Point d'entrée des modèles
+│   │   │
+│   │   ├── plateforme/
+│   │   │   ├── Plateforme.model.js
+│   │   │   └── Configuration.model.js
+│   │   │
+│   │   ├── comptes/
+│   │   │   ├── Compte.model.js
+│   │   │   ├── Session.model.js
+│   │   │   ├── TokenRevogue.model.js
+│   │   │   └── AlerteSecurite.model.js
+│   │   │
+│   │   ├── transport/
+│   │   │   ├── CompagnieTransport.model.js
+│   │   │   ├── EmplacementTransport.model.js
+│   │   │   ├── TicketTransport.model.js
+│   │   │   ├── ServiceTransport.model.js
+│   │   │   ├── AchatTicketPrive.model.js
+│   │   │   ├── AchatTicketPublic.model.js
+│   │   │   ├── AchatServicePrive.model.js
+│   │   │   └── DemandeService.model.js
+│   │   │
+│   │   ├── restauration/
+│   │   │   ├── RestaurantFastFood.model.js
+│   │   │   ├── EmplacementRestaurant.model.js
+│   │   │   ├── MenuRestaurant.model.js
+│   │   │   ├── ProduitIndividuelRestaurant.model.js
+│   │   │   ├── PromoRestaurant.model.js
+│   │   │   ├── PromoMenu.model.js
+│   │   │   ├── PromoProduit.model.js
+│   │   │   └── CommandeEmplacementFastFood.model.js
+│   │   │
+│   │   ├── boutique/
+│   │   │   ├── Boutique.model.js
+│   │   │   ├── CategorieBoutique.model.js
+│   │   │   ├── ProduitBoutique.model.js
+│   │   │   └── CommandeBoutique.model.js
+│   │   │
+│   │   ├── livraison/
+│   │   │   ├── EntrepriseLivraison.model.js
+│   │   │   ├── ServiceLivraison.model.js
+│   │   │   ├── Livreur.model.js
+│   │   │   └── DemandeLivraison.model.js
+│   │   │
+│   │   ├── blog/
+│   │   │   ├── ArticleBlog.model.js
+│   │   │   ├── Commentaire.model.js
+│   │   │   ├── LikeArticle.model.js
+│   │   │   ├── LikeCommentaire.model.js
+│   │   │   ├── SignalementArticle.model.js
+│   │   │   ├── SignalementCommentaire.model.js
+│   │   │   ├── PartageArticle.model.js
+│   │   │   ├── FavoriArticle.model.js
+│   │   │   ├── AbonnementBlog.model.js
+│   │   │   ├── NotificationBlog.model.js
+│   │   │   └── StatsLectureArticle.model.js
+│   │   │
+│   │   ├── messagerie/
+│   │   │   ├── Conversation.model.js
+│   │   │   ├── ParticipantConversation.model.js
+│   │   │   ├── Message.model.js
+│   │   │   ├── PieceJointe.model.js
+│   │   │   ├── ReactionMessage.model.js
+│   │   │   ├── LectureMessage.model.js
+│   │   │   ├── InvitationConversation.model.js
+│   │   │   ├── BlocageUtilisateur.model.js
+│   │   │   └── ModeleMessage.model.js
+│   │   │
+│   │   ├── adresse/
+│   │   │   ├── Adresse.model.js
+│   │   │   └── AdresseEntite.model.js
+│   │   │
+│   │   ├── avis/
+│   │   │   ├── Avis.model.js
+│   │   │   └── VoteAvis.model.js
+│   │   │
+│   │   ├── horaire/
+│   │   │   ├── Horaire.model.js
+│   │   │   ├── HoraireException.model.js
+│   │   │   └── JourFerie.model.js
+│   │   │
+│   │   ├── fidelite/
+│   │   │   ├── ProgrammeFidelite.model.js
+│   │   │   ├── SoldeFidelite.model.js
+│   │   │   ├── MouvementPoint.model.js
+│   │   │   └── Parrainage.model.js
+│   │   │
+│   │   ├── notification/
+│   │   │   ├── ModeleNotification.model.js
+│   │   │   ├── Notification.model.js
+│   │   │   ├── PreferenceNotification.model.js
+│   │   │   └── TokenPush.model.js
+│   │   │
+│   │   ├── document/
+│   │   │   ├── Document.model.js
+│   │   │   └── HistoriqueValidationDocument.model.js
+│   │   │
+│   │   ├── historique/
+│   │   │   ├── HistoriqueAction.model.js
+│   │   │   ├── HistoriqueTransaction.model.js
+│   │   │   ├── HistoriqueConnexion.model.js
+│   │   │   └── JournalAudit.model.js
+│   │   │
+│   │   ├── tache/
+│   │   │   └── FileTache.model.js
+│   │   │
+│   │   └── cache/
+│   │       └── CacheStatistique.model.js
+│   │
+│   ├── controllers/                       # Logique métier
+│   │   ├── index.js
+│   │   │
+│   │   ├── auth/
+│   │   │   ├── AuthController.js           # Login, register, logout, refresh token
+│   │   │   ├── PasswordController.js       # Mot de passe oublié, réinitialisation
+│   │   │   └── VerificationController.js   # 2FA, email verification
+│   │   │
+│   │   ├── comptes/
+│   │   │   ├── CompteController.js         # CRUD comptes, profil
+│   │   │   ├── RoleController.js           # Gestion des rôles/permissions
+│   │   │   └── SessionController.js        # Gestion des sessions actives
+│   │   │
+│   │   ├── transport/
+│   │   │   ├── CompagnieController.js
+│   │   │   ├── EmplacementController.js
+│   │   │   ├── TicketController.js
+│   │   │   ├── ServiceTransportController.js
+│   │   │   └── AchatTransportController.js
+│   │   │
+│   │   ├── restauration/
+│   │   │   ├── RestaurantController.js
+│   │   │   ├── EmplacementRestaurantController.js
+│   │   │   ├── MenuController.js
+│   │   │   ├── ProduitRestaurantController.js
+│   │   │   ├── PromoController.js
+│   │   │   └── CommandeRestaurantController.js
+│   │   │
+│   │   ├── boutique/
+│   │   │   ├── BoutiqueController.js
+│   │   │   ├── CategorieBoutiqueController.js
+│   │   │   ├── ProduitBoutiqueController.js
+│   │   │   └── CommandeBoutiqueController.js
+│   │   │ 
+│   │   ├── livraison/
+│   │   │   ├── EntrepriseLivraisonController.js
+│   │   │   ├── ServiceLivraisonController.js
+│   │   │   ├── LivreurController.js
+│   │   │   └── DemandeLivraisonController.js
+│   │   │
+│   │   ├── blog/
+│   │   │   ├── ArticleController.js
+│   │   │   ├── CommentaireController.js
+│   │   │   ├── LikeController.js
+│   │   │   ├── SignalementController.js
+│   │   │   ├── PartageController.js
+│   │   │   ├── FavoriController.js
+│   │   │   ├── AbonnementBlogController.js
+│   │   │   └── StatsBlogController.js
+│   │   │
+│   │   ├── messagerie/
+│   │   │   ├── ConversationController.js
+│   │   │   ├── MessageController.js
+│   │   │   ├── PieceJointeController.js
+│   │   │   ├── ReactionController.js
+│   │   │   ├── InvitationController.js
+│   │   │   └── BlocageController.js
+│   │   │
+│   │   ├── adresse/
+│   │   │   └── AdresseController.js
+│   │   │
+│   │   ├── avis/
+│   │   │   ├── AvisController.js
+│   │   │   └── VoteAvisController.js
+│   │   │
+│   │   ├── horaire/
+│   │   │   ├── HoraireController.js
+│   │   │   └── JourFerieController.js
+│   │   │
+│   │   ├── fidelite/
+│   │   │   ├── ProgrammeFideliteController.js
+│   │   │   ├── PointsFideliteController.js
+│   │   │   └── ParrainageController.js
+│   │   │
+│   │   ├── notification/
+│   │   │   ├── NotificationController.js
+│   │   │   ├── PreferenceNotificationController.js
+│   │   │   └── PushTokenController.js
+│   │   │
+│   │   ├── document/
+│   │   │   └── DocumentController.js
+│   │   │
+│   │   ├── historique/
+│   │   │   ├── HistoriqueActionController.js
+│   │   │   ├── HistoriqueTransactionController.js
+│   │   │   └── JournalAuditController.js
+│   │   │
+│   │   ├── admin/
+│   │   │   ├── DashboardController.js      # Statistiques globales
+│   │   │   ├── ModerationController.js     # Modération contenu
+│   │   │   ├── ConfigurationController.js  # Configurations système
+│   │   │   ├── RetentionController.js      # Politiques RGPD
+│   │   │   └── MaintenanceController.js    # Tâches maintenance
+│   │   │
+│   │   └── public/
+│   │       ├── CatalogueController.js      # Recherche publique
+│   │       ├── GeoController.js            # Recherche géographique
+│   │       └── StatsPubliquesController.js # Statistiques publiques
+│   │
+│   ├── routes/                             # Définition des routes
+│   │   ├── index.js                         # Point d'entrée des routes
+│   │   ├── v1/                               # Version 1 de l'API
+│   │   │   ├── auth.routes.js
+│   │   │   ├── comptes.routes.js
+│   │   │   ├── transport.routes.js
+│   │   │   ├── restauration.routes.js
+│   │   │   ├── boutique.routes.js
+│   │   │   ├── livraison.routes.js
+│   │   │   ├── blog.routes.js
+│   │   │   ├── messagerie.routes.js
+│   │   │   ├── adresse.routes.js
+│   │   │   ├── avis.routes.js
+│   │   │   ├── horaire.routes.js
+│   │   │   ├── fidelite.routes.js
+│   │   │   ├── notification.routes.js
+│   │   │   ├── document.routes.js
+│   │   │   ├── historique.routes.js
+│   │   │   ├── admin.routes.js
+│   │   │   └── public.routes.js
+│   │   │
+│   │   └── middlewares/                     # Middlewares par route
+│   │       ├── auth.middleware.js            # Vérification JWT
+│   │       ├── role.middleware.js            # Vérification rôles
+│   │       ├── validation.middleware.js      # Validation des requêtes
+│   │       ├── rateLimiter.middleware.js     # Rate limiting
+│   │       ├── upload.middleware.js          # Gestion uploads
+│   │       └── audit.middleware.js           # Journalisation actions
+│   │
+│   ├── services/                            # Services métier réutilisables
+│   │   ├── email/
+│   │   │   ├── EmailService.js               # Envoi emails (template, SMTP)
+│   │   │   └── templates/                     # Templates emails
+│   │   │       ├── welcome.html
+│   │   │       ├── reset-password.html
+│   │   │       └── notification.html
+│   │   │
+│   │   ├── sms/
+│   │   │   └── SmsService.js                 # Envoi SMS (Twilio, etc.)
+│   │   │
+│   │   ├── push/
+│   │   │   └── PushService.js                # Notifications push (FCM, APNS)
+│   │   │
+│   │   ├── file/
+│   │   │   ├── FileService.js                 # Upload/download fichiers
+│   │   │   ├── ImageService.js                 # Redimensionnement, optimisation
+│   │   │   └── StorageService.js               # Stockage (local, S3, etc.)
+│   │   │
+│   │   ├── geo/
+│   │   │   └── GeoService.js                   # Calculs géospatiaux (PostGIS)
+│   │   │
+│   │   ├── payment/
+│   │   │   ├── PaymentService.js               # Interface paiement
+│   │   │   ├── OrangeMoneyService.js           # Implémentation Orange Money
+│   │   │   ├── MoovMoneyService.js             # Implémentation Moov Money
+│   │   │   └── CarteBancaireService.js         # Paiement par carte
+│   │   │
+│   │   ├── notification/
+│   │   │   └── NotificationService.js          # Service de notification unifié
+│   │   │
+│   │   ├── cache/
+│   │   │   └── CacheService.js                 # Gestion cache (Redis)
+│   │   │
+│   │   ├── queue/
+│   │   │   ├── QueueService.js                  # File d'attente (Bull, RabbitMQ)
+│   │   │   └── workers/                           # Workers pour tâches asynchrones
+│   │   │       ├── email.worker.js
+│   │   │       ├── notification.worker.js
+│   │   │       ├── refreshViews.worker.js
+│   │   │       └── retention.worker.js
+│   │   │
+│   │   ├── search/
+│   │   │   └── SearchService.js                 # Recherche plein texte (Elasticsearch optionnel)
+│   │   │
+│   │   ├── export/
+│   │   │   └── ExportService.js                  # Export données (PDF, Excel, CSV)
+│   │   │
+│   │   ├── audit/
+│   │   │   └── AuditService.js                    # Service d'audit centralisé
+│   │   │
+│   │   ├── security/
+│   │   │   ├── EncryptionService.js                # Chiffrement données sensibles
+│   │   │   ├── TokenService.js                      # Génération/vérification tokens
+│   │   │   └── RateLimitService.js                  # Gestion rate limiting
+│   │   │
+│   │   └── validation/
+│   │       ├── ValidationService.js                 # Validation métier
+│   │       └── schemas/                              # Schémas Joi/Yup
+│   │           ├── auth.schemas.js
+│   │           ├── commande.schemas.js
+│   │           └── ...
+│   │
+│   ├── utils/                                 # Utilitaires
+│   │   ├── database/
+│   │   │   ├── queries/                          # Requêtes SQL complexes
+│   │   │   │   ├── transport.queries.js
+│   │   │   │   ├── statistiques.queries.js
+│   │   │   │   └── ...
+│   │   │   ├── migrations/                        # Migrations DB
+│   │   │   └── seeds/                             # Données de test
+│   │   │
+│   │   ├── helpers/
+│   │   │   ├── date.helper.js
+│   │   │   ├── number.helper.js
+│   │   │   ├── string.helper.js
+│   │   │   └── geojson.helper.js
+│   │   │
+│   │   ├── constants/
+│   │   │   ├── enums.js                             # Correspondance ENUM PostgreSQL
+│   │   │   ├── roles.js
+│   │   │   ├── permissions.js
+│   │   │   └── errorCodes.js
+│   │   │
+│   │   └── errors/
+│   │       ├── AppError.js
+│   │       ├── ValidationError.js
+│   │       ├── AuthenticationError.js
+│   │       └── AuthorizationError.js
+│   │
+│   ├── jobs/                                   # Tâches planifiées (CRON)
+│   │   ├── index.js
+│   │   ├── nettoyage-sessions.job.js
+│   │   ├── expiration-documents.job.js
+│   │   ├── refresh-materialized-views.job.js
+│   │   ├── nettoyage-historique.job.js
+│   │   └── alertes-securite.job.js
+│   │
+│   ├── docs/                                   # Documentation API
+│   │   ├── openapi.yaml                         # Spécification OpenAPI
+│   │   ├── postman/                              # Collection Postman
+│   │   │   └── collection.json
+│   │   └── guides/                               # Guides d'utilisation
+│   │
+│   └── app.js                                   # Point d'entrée de l'application
+│
+├── tests/                                       # Tests
+│   ├── unit/
+│   │   ├── controllers/
+│   │   ├── services/
+│   │   └── utils/
+│   │
+│   ├── integration/
+│   │   ├── auth.test.js
+│   │   ├── commandes.test.js
+│   │   └── ...
+│   │
+│   ├── e2e/
+│   │   └── api.test.js
+│   │
+│   └── fixtures/                                 # Données de test
+│       └── data.sql
+│
+├── scripts/                                      # Scripts utilitaires
+│   ├── deploy.sh
+│   ├── backup.sh
+│   ├── init-db.sh
+│   └── seed-db.js
+│
+├── .env.example                                  # Exemple variables d'environnement
+├── .gitignore
+├── package.json
+├── README.md
+└── docker-compose.yml                            # Configuration Docker

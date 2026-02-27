@@ -1,0 +1,181 @@
+version: '3.8'
+
+services:
+  # Service PostgreSQL avec PostGIS
+  postgres:
+    image: postgis/postgis:15-3.4
+    container_name: klikup_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-klikup}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-klikup123}
+      POSTGRES_DB: ${DB_NAME:-klikup_db}
+      POSTGRES_MULTIPLE_EXTENSIONS: postgis,uuid-ossp,pgcrypto
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+      - ./scripts/seed-db.sh:/scripts/seed-db.sh
+    networks:
+      - klikup_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-klikup} -d ${DB_NAME:-klikup_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Service Redis
+  redis:
+    image: redis:7-alpine
+    container_name: klikup_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf
+    networks:
+      - klikup_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Service Redis Commander (interface d'administration)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: klikup_redis_commander
+    restart: unless-stopped
+    environment:
+      REDIS_HOSTS: local:redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    ports:
+      - "${REDIS_COMMANDER_PORT:-8081}:8081"
+    networks:
+      - klikup_network
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # Service API Node.js
+  api:
+    build:
+      context: .
+      target: development
+    image: klikup-api:latest
+    container_name: klikup_api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-3000}:3000"
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: ${API_PORT:-3000}
+      
+      # Database configuration
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-klikup}
+      DB_PASSWORD: ${DB_PASSWORD:-klikup123}
+      DB_NAME: ${DB_NAME:-klikup_db}
+      DATABASE_URL: postgresql://${DB_USER:-klikup}:${DB_PASSWORD:-klikup123}@postgres:5432/${DB_NAME:-klikup_db}
+      
+      # Redis configuration
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379
+      
+      # JWT configuration
+      JWT_SECRET: ${JWT_SECRET:-your_jwt_secret_key_change_in_production}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-your_refresh_secret_key_change_in_production}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-24h}
+      JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-7d}
+      
+      # Email configuration
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-noreply@klikup.com}
+      
+      # Upload configuration
+      UPLOAD_PATH: ${UPLOAD_PATH:-./uploads}
+      MAX_FILE_SIZE: ${MAX_FILE_SIZE:-10485760}
+      
+      # CORS
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+      
+      # Rate limiting
+      RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-900000}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-100}
+      
+    volumes:
+      - ./src:/app/src
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+      - ./package.json:/app/package.json
+      - ./package-lock.json:/app/package-lock.json
+      - ./scripts:/app/scripts
+    networks:
+      - klikup_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "
+        echo 'Attente de la base de données...' &&
+        npx wait-on tcp:postgres:5432 -t 60000 &&
+        echo 'Base de données prête !' &&
+        npm run dev
+      "
+
+  # Service Adminer (interface d'administration PostgreSQL)
+  adminer:
+    image: adminer:latest
+    container_name: klikup_adminer
+    restart: unless-stopped
+    ports:
+      - "${ADMINER_PORT:-8080}:8080"
+    networks:
+      - klikup_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Service PgAdmin (interface d'administration PostgreSQL avancée)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: klikup_pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@klikup.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin123}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - klikup_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+networks:
+  klikup_network:
+    driver: bridge
+    name: klikup_network
+
+volumes:
+  postgres_data:
+    name: klikup_postgres_data
+  redis_data:
+    name: klikup_redis_data
+  pgadmin_data:
+    name: klikup_pgadmin_data
