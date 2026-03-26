@@ -4,6 +4,344 @@ const AuditService = require('../../services/audit/AuditService');
 const FileService = require('../../services/file/FileService');
 
 class MenuController {
+
+    /**
+     * Récupérer tous les menus de tous les restaurants
+     * GET /api/v1/restauration/menus/all
+     */
+    static async getAllMenus(req, res, next) {
+        try {
+            const {
+                page = 1,
+                limit = 20,
+                categorie,
+                disponible,
+                prix_min,
+                prix_max,
+                recherche,
+                restaurant_id,
+                emplacement_id,
+                tri = 'nom_asc',
+                avec_promos = false
+            } = req.query;
+
+            const offset = (page - 1) * limit;
+
+            let query = `
+                SELECT 
+                    m.id, 
+                    m.nom_menu,
+                    m.description_menu,
+                    m.photo_menu,
+                    m.photos_menu,
+                    m.composition_menu,
+                    m.prix_menu,
+                    m.temps_preparation_min,
+                    m.stock_disponible,
+                    m.categorie_menu,
+                    m.disponible,
+                    m.est_journalier,
+                    m.date_creation,
+                    erf.id as emplacement_id,
+                    erf.nom_emplacement,
+                    erf.adresse_complete,
+                    erf.frais_livraison,
+                    rf.id as restaurant_id,
+                    rf.nom_restaurant_fast_food,
+                    rf.logo_restaurant
+            `;
+
+            // Ajouter les promos si demandé
+            if (avec_promos === 'true') {
+                query += `,
+                    (
+                        SELECT json_agg(json_build_object(
+                            'id', pr.id,
+                            'nom', pr.nom_promo,
+                            'type', pr.type_promo,
+                            'reduction_pourcentage', pr.pourcentage_reduction,
+                            'reduction_fixe', pr.montant_fixe_reduction,
+                            'date_fin', pr.date_fin_promo
+                        ))
+                        FROM PROMOSMENUS pm
+                        JOIN PROMOSRESTAURANTFASTFOOD pr ON pr.id = pm.promo_id
+                        WHERE pm.menu_id = m.id
+                        AND pr.actif = true
+                        AND pr.date_debut_promo <= NOW()
+                        AND pr.date_fin_promo >= NOW()
+                    ) as promos_actives
+                `;
+            }
+
+            query += `
+                FROM MENURESTAURANTFASTFOOD m
+                JOIN EMPLACEMENTSRESTAURANTFASTFOOD erf ON erf.id = m.id_restaurant_fast_food_emplacement
+                JOIN RESTAURANTSFASTFOOD rf ON rf.id = erf.id_restaurant_fast_food
+                WHERE rf.est_supprime = false
+            `;
+
+            const params = [];
+            let paramIndex = 1;
+
+            // Filtres optionnels
+            if (categorie) {
+                query += ` AND m.categorie_menu = $${paramIndex}`;
+                params.push(categorie);
+                paramIndex++;
+            }
+
+            if (disponible !== undefined) {
+                query += ` AND m.disponible = $${paramIndex}`;
+                params.push(disponible === 'true');
+                paramIndex++;
+            }
+
+            if (prix_min) {
+                query += ` AND m.prix_menu >= $${paramIndex}`;
+                params.push(parseFloat(prix_min));
+                paramIndex++;
+            }
+
+            if (prix_max) {
+                query += ` AND m.prix_menu <= $${paramIndex}`;
+                params.push(parseFloat(prix_max));
+                paramIndex++;
+            }
+
+            if (recherche) {
+                query += ` AND (m.nom_menu ILIKE $${paramIndex} OR m.description_menu ILIKE $${paramIndex})`;
+                params.push(`%${recherche}%`);
+                paramIndex++;
+            }
+
+            if (restaurant_id) {
+                query += ` AND rf.id = $${paramIndex}`;
+                params.push(parseInt(restaurant_id));
+                paramIndex++;
+            }
+
+            if (emplacement_id) {
+                query += ` AND erf.id = $${paramIndex}`;
+                params.push(parseInt(emplacement_id));
+                paramIndex++;
+            }
+
+            // Tri
+            switch (tri) {
+                case 'prix_asc':
+                    query += ` ORDER BY m.prix_menu ASC`;
+                    break;
+                case 'prix_desc':
+                    query += ` ORDER BY m.prix_menu DESC`;
+                    break;
+                case 'nom_desc':
+                    query += ` ORDER BY m.nom_menu DESC`;
+                    break;
+                case 'restaurant_asc':
+                    query += ` ORDER BY rf.nom_restaurant_fast_food ASC, m.nom_menu ASC`;
+                    break;
+                case 'recent_desc':
+                    query += ` ORDER BY m.date_creation DESC`;
+                    break;
+                default:
+                    query += ` ORDER BY rf.nom_restaurant_fast_food ASC, m.nom_menu ASC`;
+            }
+
+            // Pagination
+            query += ` LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+            params.push(parseInt(limit), offset);
+
+            // Exécuter la requête principale
+            const result = await db.query(query, params);
+
+            // Traiter les résultats
+            const menus = result.rows.map(menu => {
+                const processed = {
+                    ...menu,
+                    prix_menu: parseFloat(menu.prix_menu),
+                    photos_menu: menu.photos_menu || [],
+                    composition_menu: menu.composition_menu || []
+                };
+
+                // Parser les promos si présentes
+                if (menu.promos_actives && typeof menu.promos_actives === 'string') {
+                    try {
+                        processed.promos_actives = JSON.parse(menu.promos_actives);
+                    } catch (e) {
+                        processed.promos_actives = [];
+                    }
+                }
+
+                // Calculer le prix avec promo si applicable
+                if (processed.promos_actives && processed.promos_actives.length > 0) {
+                    const promo = processed.promos_actives[0];
+                    if (promo.type_promo === 'POURCENTAGE' && promo.reduction_pourcentage) {
+                        processed.prix_avec_promo = processed.prix_menu * (1 - promo.reduction_pourcentage / 100);
+                    } else if (promo.type_promo === 'MONTANT_FIXE' && promo.reduction_fixe) {
+                        processed.prix_avec_promo = Math.max(0, processed.prix_menu - promo.reduction_fixe);
+                    }
+                }
+
+                return processed;
+            });
+
+            // Compter le total pour la pagination
+            let countQuery = `
+                SELECT COUNT(*) as total 
+                FROM MENURESTAURANTFASTFOOD m
+                JOIN EMPLACEMENTSRESTAURANTFASTFOOD erf ON erf.id = m.id_restaurant_fast_food_emplacement
+                JOIN RESTAURANTSFASTFOOD rf ON rf.id = erf.id_restaurant_fast_food
+                WHERE rf.est_supprime = false
+            `;
+
+            // Réappliquer les mêmes filtres pour le count
+            const countParams = [];
+            let countParamIndex = 1;
+
+            if (categorie) {
+                countQuery += ` AND m.categorie_menu = $${countParamIndex}`;
+                countParams.push(categorie);
+                countParamIndex++;
+            }
+
+            if (disponible !== undefined) {
+                countQuery += ` AND m.disponible = $${countParamIndex}`;
+                countParams.push(disponible === 'true');
+                countParamIndex++;
+            }
+
+            if (prix_min) {
+                countQuery += ` AND m.prix_menu >= $${countParamIndex}`;
+                countParams.push(parseFloat(prix_min));
+                countParamIndex++;
+            }
+
+            if (prix_max) {
+                countQuery += ` AND m.prix_menu <= $${countParamIndex}`;
+                countParams.push(parseFloat(prix_max));
+                countParamIndex++;
+            }
+
+            if (recherche) {
+                countQuery += ` AND (m.nom_menu ILIKE $${countParamIndex} OR m.description_menu ILIKE $${countParamIndex})`;
+                countParams.push(`%${recherche}%`);
+                countParamIndex++;
+            }
+
+            if (restaurant_id) {
+                countQuery += ` AND rf.id = $${countParamIndex}`;
+                countParams.push(parseInt(restaurant_id));
+                countParamIndex++;
+            }
+
+            if (emplacement_id) {
+                countQuery += ` AND erf.id = $${countParamIndex}`;
+                countParams.push(parseInt(emplacement_id));
+                countParamIndex++;
+            }
+
+            const countResult = await db.query(countQuery, countParams);
+
+            res.json({
+                success: true,
+                data: menus,
+                pagination: {
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    total: parseInt(countResult.rows[0].total),
+                    pages: Math.ceil(parseInt(countResult.rows[0].total) / limit)
+                },
+                filters: {
+                    appliques: {
+                        categorie: categorie || null,
+                        disponible: disponible || null,
+                        prix_min: prix_min || null,
+                        prix_max: prix_max || null,
+                        recherche: recherche || null,
+                        restaurant_id: restaurant_id || null,
+                        emplacement_id: emplacement_id || null
+                    }
+                }
+            });
+
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    /**
+     * Récupérer les menus groupés par restaurant
+     * GET /api/v1/restauration/menus/by-restaurant
+     */
+    static async getMenusByRestaurant(req, res, next) {
+        try {
+            const {
+                limit_par_restaurant = 10,
+                categorie,
+                disponible = 'true'
+            } = req.query;
+
+            const query = `
+                SELECT 
+                    rf.id as restaurant_id,
+                    rf.nom_restaurant_fast_food,
+                    rf.logo_restaurant,
+                    (
+                        SELECT json_agg(json_build_object(
+                            'id', m.id,
+                            'nom', m.nom_menu,
+                            'description', m.description_menu,
+                            'photo', m.photo_menu,
+                            'prix', m.prix_menu,
+                            'categorie', m.categorie_menu,
+                            'temps_preparation', m.temps_preparation_min,
+                            'emplacement_id', erf.id,
+                            'emplacement_nom', erf.nom_emplacement
+                        ) ORDER BY m.prix_menu)
+                        FROM (
+                            SELECT DISTINCT m.*, erf.nom_emplacement
+                            FROM MENURESTAURANTFASTFOOD m
+                            JOIN EMPLACEMENTSRESTAURANTFASTFOOD erf ON erf.id = m.id_restaurant_fast_food_emplacement
+                            WHERE erf.id_restaurant_fast_food = rf.id
+                            AND m.disponible = CASE WHEN $1 = 'true' THEN true ELSE m.disponible END
+                            AND ($2 IS NULL OR m.categorie_menu = $2)
+                            ORDER BY m.prix_menu
+                            LIMIT $3
+                        ) m
+                    ) as menus
+                FROM RESTAURANTSFASTFOOD rf
+                WHERE rf.est_actif = true AND rf.est_supprime = false
+                ORDER BY rf.nom_restaurant_fast_food
+            `;
+
+            const result = await db.query(query, [
+                disponible,
+                categorie || null,
+                parseInt(limit_par_restaurant)
+            ]);
+
+            // Filtrer les restaurants qui ont des menus
+            const restaurantsAvecMenus = result.rows
+                .filter(r => r.menus && r.menus.length > 0)
+                .map(r => ({
+                    ...r,
+                    menus: r.menus.map(m => ({
+                        ...m,
+                        prix: parseFloat(m.prix)
+                    }))
+                }));
+
+            res.json({
+                success: true,
+                data: restaurantsAvecMenus,
+                total_restaurants: restaurantsAvecMenus.length
+            });
+
+        } catch (error) {
+            next(error);
+        }
+    }
+
     /**
      * Récupérer tous les menus d'un emplacement
      * GET /api/v1/restauration/emplacements/:emplacementId/menus

@@ -141,7 +141,8 @@ class TokenService {
       const payload = {
         id: decoded.id,
         email: decoded.email,
-        role: decoded.role
+        role: decoded.role,
+        session_id: decoded.session_id
       };
       
       // Générer un nouveau access token

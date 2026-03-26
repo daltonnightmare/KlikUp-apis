@@ -1,5 +1,5 @@
 // src/controllers/boutique/BoutiqueController.js
-const pool = require('../../configuration/database');
+const db = require('../../configuration/database');
 const { AppError } = require('../../utils/errors/AppError');
 const { ValidationError } = require('../../utils/errors/AppError');
 const GeoService = require('../../services/geo/GeoService');
@@ -15,7 +15,7 @@ class BoutiqueController {
      * @access ADMINISTRATEUR_PLATEFORME, ADMINISTRATEUR_COMPAGNIE
      */
     async create(req, res, next) {
-        const client = await pool.connect();
+        const client = await db.getClient();
         try {
             await client.query('BEGIN');
             
@@ -134,6 +134,7 @@ class BoutiqueController {
      * @access PUBLIC
      */
     async findAll(req, res, next) {
+        const client = await db.getClient();
         try {
             const {
                 page = 1,
@@ -250,10 +251,10 @@ class BoutiqueController {
 
             params.push(parseInt(limit), offset);
 
-            const result = await pool.query(query, params);
+            const result = await client.query(query, params);
 
             // Comptage total
-            const countResult = await pool.query(
+            const countResult = await client.query(
                 `SELECT COUNT(*) FROM BOUTIQUES b 
                  WHERE ${whereConditions.join(' AND ')}`,
                 params.slice(0, -2)
@@ -273,6 +274,8 @@ class BoutiqueController {
         } catch (error) {
             logError('Erreur récupération boutiques:', error);
             next(error);
+        } finally {
+            client.release();
         }
     }
 
@@ -282,12 +285,13 @@ class BoutiqueController {
      * @access PUBLIC
      */
     async findById(req, res, next) {
+        const client = await db.getClient();
         try {
             const { id } = req.params;
             const { inclure_produits, inclure_avis, inclure_horaires } = req.query;
 
             // Récupération boutique
-            const boutiqueQuery = await pool.query(
+            const boutiqueQuery = await client.query(
                 `SELECT 
                     b.*,
                     p.nom_plateforme,
@@ -305,12 +309,12 @@ class BoutiqueController {
             const boutique = boutiqueQuery.rows[0];
             const result = { ...boutique };
 
-            // Chargement optionnel des données
+            // Chargement optionnel des données avec le même client
             await Promise.all([
-                inclure_produits === 'true' && this._chargerProduits(result, id),
-                inclure_avis === 'true' && this._chargerAvis(result, id),
-                inclure_horaires === 'true' && this._chargerHoraires(result, id),
-                this._chargerAdresses(result, id)
+                inclure_produits === 'true' && this._chargerProduits(client, result, id),
+                inclure_avis === 'true' && this._chargerAvis(client, result, id),
+                inclure_horaires === 'true' && this._chargerHoraires(client, result, id),
+                this._chargerAdresses(client, result, id)
             ]);
 
             res.json({
@@ -321,6 +325,8 @@ class BoutiqueController {
         } catch (error) {
             logError('Erreur récupération boutique:', error);
             next(error);
+        } finally {
+            client.release();
         }
     }
 
@@ -329,7 +335,7 @@ class BoutiqueController {
      * @route PUT /api/v1/boutiques/:id
      */
     async update(req, res, next) {
-        const client = await pool.connect();
+        const client = await db.getClient();
         try {
             await client.query('BEGIN');
             
@@ -404,7 +410,7 @@ class BoutiqueController {
      * @route DELETE /api/v1/boutiques/:id
      */
     async delete(req, res, next) {
-        const client = await pool.connect();
+        const client = await db.getClient();
         try {
             await client.query('BEGIN');
             
@@ -424,14 +430,13 @@ class BoutiqueController {
             }
 
             // Soft delete
-            const result = await client.query(
+            await client.query(
                 `UPDATE BOUTIQUES 
                 SET est_supprime = true, 
                     date_suppression = NOW(),
                     est_actif = false,
                     date_mise_a_jour = NOW()
-                WHERE id = $1
-                RETURNING *`,
+                WHERE id = $1`,
                 [id]
             );
 
@@ -464,11 +469,12 @@ class BoutiqueController {
      * @route GET /api/v1/boutiques/:id/stats
      */
     async getStats(req, res, next) {
+        const client = await db.getClient();
         try {
             const { id } = req.params;
             const { periode = '30j' } = req.query;
 
-            const stats = await pool.query(`
+            const stats = await client.query(`
                 WITH stats_commandes AS (
                     SELECT 
                         COUNT(*) as total_commandes,
@@ -519,6 +525,8 @@ class BoutiqueController {
         } catch (error) {
             logError('Erreur récupération statistiques:', error);
             next(error);
+        } finally {
+            client.release();
         }
     }
 
@@ -534,8 +542,8 @@ class BoutiqueController {
         return orders[tri] || orders.date_creation_desc;
     }
 
-    async _chargerProduits(result, boutiqueId) {
-        const produits = await pool.query(
+    async _chargerProduits(client, result, boutiqueId) {
+        const produits = await client.query(
             `SELECT id, nom_produit, image_produit, prix_unitaire_produit, 
                     prix_promo, quantite, est_disponible
              FROM PRODUITSBOUTIQUE
@@ -547,9 +555,9 @@ class BoutiqueController {
         result.produits = produits.rows;
     }
 
-    async _chargerAvis(result, boutiqueId) {
+    async _chargerAvis(client, result, boutiqueId) {
         const [avis, stats] = await Promise.all([
-            pool.query(
+            client.query(
                 `SELECT a.*, c.nom_utilisateur_compte, c.photo_profil_compte
                  FROM AVIS a
                  LEFT JOIN COMPTES c ON c.id = a.auteur_id
@@ -560,7 +568,7 @@ class BoutiqueController {
                  LIMIT 5`,
                 [boutiqueId]
             ),
-            pool.query(
+            client.query(
                 `SELECT COUNT(*) as total,
                         ROUND(AVG(note_globale)::NUMERIC, 2) as moyenne
                  FROM AVIS
@@ -575,15 +583,15 @@ class BoutiqueController {
         result.statistiques_avis = stats.rows[0];
     }
 
-    async _chargerHoraires(result, boutiqueId) {
+    async _chargerHoraires(client, result, boutiqueId) {
         const [horaires, exceptions] = await Promise.all([
-            pool.query(
+            client.query(
                 `SELECT * FROM HORAIRES
                  WHERE entite_type = 'BOUTIQUE' AND entite_id = $1
                  ORDER BY jour_semaine`,
                 [boutiqueId]
             ),
-            pool.query(
+            client.query(
                 `SELECT * FROM HORAIRES_EXCEPTIONS
                  WHERE entite_type = 'BOUTIQUE' AND entite_id = $1
                  AND date_exception >= CURRENT_DATE
@@ -596,8 +604,8 @@ class BoutiqueController {
         result.exceptions_horaires = exceptions.rows;
     }
 
-    async _chargerAdresses(result, boutiqueId) {
-        const adresses = await pool.query(
+    async _chargerAdresses(client, result, boutiqueId) {
+        const adresses = await client.query(
             `SELECT a.*, ae.type_adresse
              FROM ADRESSES a
              JOIN ADRESSES_ENTITES ae ON ae.adresse_id = a.id

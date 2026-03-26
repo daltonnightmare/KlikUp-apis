@@ -45,6 +45,7 @@ const verificationLimiter = rateLimit({
 router.get('/',
     authMiddleware.authenticate,
     roleMiddleware.isAdmin(),
+    roleMiddleware.isPlatformAdmin(),
     validationMiddleware.validate([
         query('page').optional().isInt({ min: 1 }),
         query('limit').optional().isInt({ min: 1, max: 100 }),

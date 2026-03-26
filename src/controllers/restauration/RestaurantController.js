@@ -126,73 +126,97 @@ class RestaurantController {
      * GET /api/v1/restauration/restaurants/:id
      */
     static async getById(req, res, next) {
-        try {
-            const { id } = req.params;
+    try {
+        const { id } = req.params;
 
-            const result = await db.query(
-                `SELECT 
-                    rf.*,
-                    p.nom_plateforme,
-                    (
-                        SELECT json_agg(json_build_object(
-                            'id', erf.id,
-                            'nom', erf.nom_emplacement,
-                            'logo', erf.logo_restaurant,
-                            'adresse', erf.adresse_complete,
-                            'localisation', ST_AsGeoJSON(erf.localisation_restaurant),
-                            'frais_livraison', erf.frais_livraison,
-                            'heure_ouverture', erf.heure_ouverture,
-                            'heure_fermeture', erf.heure_fermeture,
-                            'jours_ouverture', erf.jours_ouverture_emplacement_restaurant,
-                            'portefeuille', erf.portefeuille_emplacement,
-                            'est_actif', erf.est_actif,
-                            'nombre_menus', (
-                                SELECT COUNT(*) FROM MENURESTAURANTFASTFOOD m 
-                                WHERE m.id_restaurant_fast_food_emplacement = erf.id AND m.disponible = true
-                            )
-                        ))
-                        FROM EMPLACEMENTSRESTAURANTFASTFOOD erf
-                        WHERE erf.id_restaurant_fast_food = rf.id
-                        ORDER BY erf.nom_emplacement ASC
-                    ) as emplacements,
-                    (
-                        SELECT 
-                            AVG(note_globale) as note_moyenne,
-                            COUNT(*) as nombre_avis
-                        FROM AVIS 
-                        WHERE entite_type = 'RESTAURANT_FAST_FOOD' 
-                          AND entite_id = rf.id 
-                          AND statut = 'PUBLIE'
-                    ) as notes
-                FROM RESTAURANTSFASTFOOD rf
-                LEFT JOIN PLATEFORME p ON p.id = rf.plateforme_id
-                WHERE rf.id = $1 AND rf.est_supprime = false`,
-                [id]
-            );
+        // Récupérer le restaurant principal
+        const restaurantResult = await db.query(
+            `SELECT rf.*, p.nom_plateforme 
+             FROM RESTAURANTSFASTFOOD rf
+             LEFT JOIN PLATEFORME p ON p.id = rf.plateforme_id
+             WHERE rf.id = $1 AND rf.est_supprime = false`,
+            [id]
+        );
 
-            if (result.rows.length === 0) {
-                throw new AppError('Restaurant non trouvé', 404);
-            }
-
-            const restaurant = result.rows[0];
-            
-            if (restaurant.emplacements) {
-                restaurant.emplacements = restaurant.emplacements.map(emp => ({
-                    ...emp,
-                    localisation: emp.localisation ? JSON.parse(emp.localisation) : null
-                }));
-            }
-
-            res.json({
-                success: true,
-                data: restaurant
-            });
-
-        } catch (error) {
-            next(error);
+        if (restaurantResult.rows.length === 0) {
+            throw new AppError('Restaurant non trouvé', 404);
         }
-    }
 
+        const restaurant = restaurantResult.rows[0];
+
+        // Récupérer les emplacements séparément
+        const emplacementsResult = await db.query(
+            `SELECT 
+                erf.id,
+                erf.nom_emplacement as nom,
+                erf.logo_restaurant as logo,
+                erf.adresse_complete as adresse,
+                ST_AsGeoJSON(erf.localisation_restaurant) as localisation_geojson,
+                erf.frais_livraison,
+                erf.heure_ouverture,
+                erf.heure_fermeture,
+                erf.jours_ouverture_emplacement_restaurant as jours_ouverture,
+                erf.portefeuille_emplacement as portefeuille,
+                erf.est_actif,
+                (
+                    SELECT COUNT(*) 
+                    FROM MENURESTAURANTFASTFOOD m 
+                    WHERE m.id_restaurant_fast_food_emplacement = erf.id 
+                    AND m.disponible = true
+                ) as nombre_menus
+            FROM EMPLACEMENTSRESTAURANTFASTFOOD erf
+            WHERE erf.id_restaurant_fast_food = $1
+            ORDER BY erf.nom_emplacement ASC`,
+            [id]
+        );
+
+        // Récupérer les notes
+        const notesResult = await db.query(
+            `SELECT 
+                COALESCE(AVG(note_globale), 0) as note_moyenne,
+                COUNT(*) as nombre_avis
+            FROM AVIS 
+            WHERE entite_type = 'RESTAURANT_FAST_FOOD' 
+              AND entite_id = $1 
+              AND statut = 'PUBLIE'`,
+            [id]
+        );
+
+        // Traiter les emplacements
+        restaurant.emplacements = emplacementsResult.rows.map(emp => {
+            // Créer un nouvel objet sans la propriété localisation_geojson
+            const { localisation_geojson, ...empData } = emp;
+            
+            // Ajouter la localisation parsée si elle existe
+            if (localisation_geojson) {
+                try {
+                    empData.localisation = JSON.parse(localisation_geojson);
+                } catch (e) {
+                    console.error('Erreur parsing localisation:', e);
+                    empData.localisation = null;
+                }
+            } else {
+                empData.localisation = null;
+            }
+            
+            return empData;
+        });
+
+        // Ajouter les notes
+        restaurant.notes = {
+            note_moyenne: parseFloat(notesResult.rows[0].note_moyenne) || 0,
+            nombre_avis: parseInt(notesResult.rows[0].nombre_avis) || 0
+        };
+
+        res.json({
+            success: true,
+            data: restaurant
+        });
+
+    } catch (error) {
+        next(error);
+    }
+    }
     /**
      * Créer un nouveau restaurant
      * POST /api/v1/restauration/restaurants

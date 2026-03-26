@@ -1,26 +1,47 @@
 // src/routes/middlewares/auth.middleware.js
 const jwt = require('jsonwebtoken');
 const db = require('../../configuration/database');
+const TokenService = require('../../services/security/TokenService'); // ✅ Importer TokenService
 const { AuthenticationError, AuthorizationError } = require('../../utils/errors/AppError');
 const { TOKEN_SECRET, REFRESH_SECRET } = require('../../configuration/env');
 
 class AuthMiddleware {
+    constructor(){
+        this.authenticate = this.authenticate.bind(this);
+        this.optionalAuthenticate = this.optionalAuthenticate.bind(this);
+        this.refreshToken = this.refreshToken.bind(this);
+        this.logout = this.logout.bind(this);
+        // ✅ extractToken n'est plus nécessaire car on utilise TokenService
+    }
+
     /**
      * Vérifie que l'utilisateur est authentifié
      */
     async authenticate(req, res, next) {
         try {
-            const token = this.extractToken(req);
+            // ✅ Utiliser TokenService pour extraire le token
+            let token = null;
+            const authHeader = req.headers.authorization;
+            
+            if (authHeader) {
+                try {
+                    token = TokenService.extractBearerToken(authHeader);
+                } catch (error) {
+                    // Si ce n'est pas un Bearer token, on continue avec les autres méthodes
+                }
+            }
+
+            // Fallback sur les autres méthodes si pas de token dans le header
+            if (!token) {
+                token = req.cookies?.token || req.query?.token || null;
+            }
 
             if (!token) {
                 throw new AuthenticationError('Token d\'authentification manquant');
             }
 
             // Vérifier si le token est révoqué
-            const tokenHash = require('crypto')
-                .createHash('sha256')
-                .update(token)
-                .digest('hex');
+            const tokenHash = TokenService.hashToken(token); // ✅ Utiliser TokenService
 
             const revoked = await db.query(
                 'SELECT id FROM TOKENS_REVOQUES WHERE token_hash = $1',
@@ -32,7 +53,7 @@ class AuthMiddleware {
             }
 
             // Vérifier et décoder le token
-            const decoded = jwt.verify(token, TOKEN_SECRET);
+            const decoded = TokenService.verifyAccessToken(token); // ✅ Utiliser TokenService
 
             // Vérifier que la session est active
             const session = await db.query(
@@ -83,27 +104,44 @@ class AuthMiddleware {
      */
     async optionalAuthenticate(req, res, next) {
         try {
-            const token = this.extractToken(req);
+            // ✅ Utiliser TokenService
+            let token = null;
+            const authHeader = req.headers.authorization;
+            
+            if (authHeader) {
+                try {
+                    token = TokenService.extractBearerToken(authHeader);
+                } catch (error) {
+                    // Ignorer
+                }
+            }
+
+            if (!token) {
+                token = req.cookies?.token || req.query?.token || null;
+            }
             
             if (token) {
-                const decoded = jwt.verify(token, TOKEN_SECRET, { ignoreExpiration: false });
-                
-                const session = await db.query(
-                    `SELECT c.* 
-                     FROM SESSIONS s
-                     JOIN COMPTES c ON c.id = s.compte_id
-                     WHERE s.session_uuid = $1 AND s.est_active = true`,
-                    [decoded.session_id]
-                );
+                try {
+                    const decoded = TokenService.verifyAccessToken(token);
+                    
+                    const session = await db.query(
+                        `SELECT c.* 
+                         FROM SESSIONS s
+                         JOIN COMPTES c ON c.id = s.compte_id
+                         WHERE s.session_uuid = $1 AND s.est_active = true`,
+                        [decoded.session_id]
+                    );
 
-                if (session.rows.length > 0) {
-                    req.user = session.rows[0];
+                    if (session.rows.length > 0) {
+                        req.user = session.rows[0];
+                    }
+                } catch (error) {
+                    // Ignorer les erreurs de token pour l'auth optionnelle
                 }
             }
             
             next();
         } catch (error) {
-            // Ignorer les erreurs d'authentification
             next(error);
         }
     }
@@ -119,36 +157,14 @@ class AuthMiddleware {
                 throw new AuthenticationError('Refresh token manquant');
             }
 
-            const decoded = jwt.verify(refresh_token, REFRESH_SECRET);
-
-            const session = await db.query(
-                `SELECT * FROM SESSIONS 
-                 WHERE session_uuid = $1 
-                   AND est_active = true 
-                   AND date_refresh_expiration > NOW()`,
-                [decoded.session_id]
-            );
-
-            if (session.rows.length === 0) {
-                throw new AuthenticationError('Session invalide ou expirée');
-            }
-
-            // Générer un nouveau token d'accès
-            const newToken = jwt.sign(
-                { 
-                    user_id: session.rows[0].compte_id,
-                    session_id: decoded.session_id,
-                    role: session.rows[0].compte_role
-                },
-                TOKEN_SECRET,
-                { expiresIn: '24h' }
-            );
+            // ✅ Utiliser TokenService pour rafraîchir
+            const result = TokenService.refreshAccessToken(refresh_token);
 
             res.json({
                 success: true,
                 data: {
-                    token: newToken,
-                    expires_in: 86400
+                    token: result.accessToken,
+                    expires_in: result.expiresIn
                 }
             });
 
@@ -162,13 +178,24 @@ class AuthMiddleware {
      */
     async logout(req, res, next) {
         try {
-            const token = this.extractToken(req);
+            // ✅ Utiliser TokenService
+            let token = null;
+            const authHeader = req.headers.authorization;
+            
+            if (authHeader) {
+                try {
+                    token = TokenService.extractBearerToken(authHeader);
+                } catch (error) {
+                    // Ignorer
+                }
+            }
+
+            if (!token) {
+                token = req.cookies?.token || req.query?.token || null;
+            }
             
             if (token) {
-                const tokenHash = require('crypto')
-                    .createHash('sha256')
-                    .update(token)
-                    .digest('hex');
+                const tokenHash = TokenService.hashToken(token); // ✅ Utiliser TokenService
 
                 // Révoquer le token
                 await db.query(
@@ -188,6 +215,16 @@ class AuthMiddleware {
                         [req.session.id]
                     );
                 }
+
+                // Journaliser la déconnexion
+                if (req.user?.id) {
+                    await db.query(
+                        `INSERT INTO HISTORIQUE_CONNEXIONS 
+                         (compte_id, type_connexion, adresse_ip, utilisateur_agent, statut_connexion)
+                         VALUES ($1, $2, $3, $4, $5)`,
+                        [req.user.id, 'DECONNEXION', req.ip, req.get('User-Agent'), 'SUCCESS']
+                    );
+                }
             }
 
             res.json({
@@ -200,24 +237,8 @@ class AuthMiddleware {
         }
     }
 
-    /**
-     * Extraire le token de la requête
-     */
-    extractToken(req) {
-        if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
-            return req.headers.authorization.substring(7);
-        }
-        
-        if (req.cookies && req.cookies.token) {
-            return req.cookies.token;
-        }
-        
-        if (req.query && req.query.token) {
-            return req.query.token;
-        }
-        
-        return null;
-    }
+    // ✅ La méthode extractToken n'est plus nécessaire
+    // extractToken(req) { ... }
 }
 
 module.exports = new AuthMiddleware();

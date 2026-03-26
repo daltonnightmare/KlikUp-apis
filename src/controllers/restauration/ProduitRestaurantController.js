@@ -4,6 +4,678 @@ const AuditService = require('../../services/audit/AuditService');
 const FileService = require('../../services/file/FileService');
 
 class ProduitRestaurantController {
+
+    /**
+     * Récupérer tous les produits de tous les restaurants
+     * GET /api/v1/restauration/produits/all
+     */
+    static async getAllProduits(req, res, next) {
+        try {
+            const {
+                page = 1,
+                limit = 20,
+                categorie,
+                disponible,
+                prix_min,
+                prix_max,
+                recherche,
+                restaurant_id,
+                emplacement_id,
+                tri = 'nom_asc',
+                avec_promos = false,
+                en_stock = false
+            } = req.query;
+
+            const offset = (page - 1) * limit;
+
+            let query = `
+                SELECT 
+                    p.id, 
+                    p.nom_produit,
+                    p.description_produit,
+                    p.photo_produit,
+                    p.donnees_produit,
+                    p.prix_produit,
+                    p.stock_disponible,
+                    p.categorie_produit,
+                    p.disponible,
+                    p.est_journalier,
+                    p.date_creation,
+                    p.id_restaurant_fast_food_emplacement,
+                    erf.id as emplacement_id,
+                    erf.nom_emplacement,
+                    erf.adresse_complete,
+                    erf.frais_livraison,
+                    rf.id as restaurant_id,
+                    rf.nom_restaurant_fast_food,
+                    rf.logo_restaurant,
+                    rf.est_actif as restaurant_actif
+            `;
+
+            // Ajouter les promos si demandé
+            if (avec_promos === 'true') {
+                query += `,
+                    (
+                        SELECT json_agg(json_build_object(
+                            'id', pr.id,
+                            'nom', pr.nom_promo,
+                            'type', pr.type_promo,
+                            'reduction_pourcentage', pr.pourcentage_reduction,
+                            'reduction_fixe', pr.montant_fixe_reduction,
+                            'code', pr.code_promo,
+                            'date_debut', pr.date_debut_promo,
+                            'date_fin', pr.date_fin_promo
+                        ))
+                        FROM PROMOSPRODUITS pp
+                        JOIN PROMOSRESTAURANTFASTFOOD pr ON pr.id = pp.promo_id
+                        WHERE pp.produit_id = p.id
+                        AND pr.actif = true
+                        AND pr.date_debut_promo <= NOW()
+                        AND pr.date_fin_promo >= NOW()
+                    ) as promos_actives
+                `;
+            }
+
+            query += `
+                FROM PRODUITSINDIVIDUELRESTAURANT p
+                JOIN EMPLACEMENTSRESTAURANTFASTFOOD erf ON erf.id = p.id_restaurant_fast_food_emplacement
+                JOIN RESTAURANTSFASTFOOD rf ON rf.id = erf.id_restaurant_fast_food
+                WHERE rf.est_supprime = false
+            `;
+
+            const params = [];
+            let paramIndex = 1;
+
+            // Filtres optionnels
+            if (categorie) {
+                query += ` AND p.categorie_produit = $${paramIndex}`;
+                params.push(categorie);
+                paramIndex++;
+            }
+
+            if (disponible !== undefined) {
+                query += ` AND p.disponible = $${paramIndex}`;
+                params.push(disponible === 'true');
+                paramIndex++;
+            }
+
+            if (prix_min) {
+                query += ` AND p.prix_produit >= $${paramIndex}`;
+                params.push(parseFloat(prix_min));
+                paramIndex++;
+            }
+
+            if (prix_max) {
+                query += ` AND p.prix_produit <= $${paramIndex}`;
+                params.push(parseFloat(prix_max));
+                paramIndex++;
+            }
+
+            if (recherche) {
+                query += ` AND (p.nom_produit ILIKE $${paramIndex} OR p.description_produit ILIKE $${paramIndex})`;
+                params.push(`%${recherche}%`);
+                paramIndex++;
+            }
+
+            if (restaurant_id) {
+                query += ` AND rf.id = $${paramIndex}`;
+                params.push(parseInt(restaurant_id));
+                paramIndex++;
+            }
+
+            if (emplacement_id) {
+                query += ` AND erf.id = $${paramIndex}`;
+                params.push(parseInt(emplacement_id));
+                paramIndex++;
+            }
+
+            if (en_stock === 'true') {
+                query += ` AND (p.stock_disponible = -1 OR p.stock_disponible > 0)`;
+            }
+
+            // Tri
+            switch (tri) {
+                case 'prix_asc':
+                    query += ` ORDER BY p.prix_produit ASC`;
+                    break;
+                case 'prix_desc':
+                    query += ` ORDER BY p.prix_produit DESC`;
+                    break;
+                case 'nom_desc':
+                    query += ` ORDER BY p.nom_produit DESC`;
+                    break;
+                case 'restaurant_asc':
+                    query += ` ORDER BY rf.nom_restaurant_fast_food ASC, p.nom_produit ASC`;
+                    break;
+                case 'recent_desc':
+                    query += ` ORDER BY p.date_creation DESC`;
+                    break;
+                case 'stock_asc':
+                    query += ` ORDER BY p.stock_disponible ASC NULLS LAST`;
+                    break;
+                default:
+                    query += ` ORDER BY rf.nom_restaurant_fast_food ASC, p.categorie_produit ASC, p.nom_produit ASC`;
+            }
+
+            // Pagination
+            query += ` LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+            params.push(parseInt(limit), offset);
+
+            // Exécuter la requête principale
+            const result = await db.query(query, params);
+
+            // Traiter les résultats
+            const produits = result.rows.map(produit => {
+                const processed = {
+                    ...produit,
+                    prix_produit: parseFloat(produit.prix_produit),
+                    donnees_produit: produit.donnees_produit || {}
+                };
+
+                // Parser les promos si présentes
+                if (produit.promos_actives && typeof produit.promos_actives === 'string') {
+                    try {
+                        processed.promos_actives = JSON.parse(produit.promos_actives);
+                    } catch (e) {
+                        processed.promos_actives = [];
+                    }
+                }
+
+                // Calculer le prix avec promo si applicable
+                if (processed.promos_actives && processed.promos_actives.length > 0) {
+                    const promo = processed.promos_actives[0];
+                    if (promo.type_promo === 'POURCENTAGE' && promo.reduction_pourcentage) {
+                        processed.prix_avec_promo = processed.prix_produit * (1 - promo.reduction_pourcentage / 100);
+                        processed.economie = processed.prix_produit - processed.prix_avec_promo;
+                    } else if (promo.type_promo === 'MONTANT_FIXE' && promo.reduction_fixe) {
+                        processed.prix_avec_promo = Math.max(0, processed.prix_produit - promo.reduction_fixe);
+                        processed.economie = promo.reduction_fixe;
+                    }
+                }
+
+                // Ajouter l'état du stock
+                processed.est_en_rupture = processed.stock_disponible === 0;
+                processed.stock_illimite = processed.stock_disponible === -1;
+
+                return processed;
+            });
+
+            // Compter le total pour la pagination
+            let countQuery = `
+                SELECT COUNT(*) as total 
+                FROM PRODUITSINDIVIDUELRESTAURANT p
+                JOIN EMPLACEMENTSRESTAURANTFASTFOOD erf ON erf.id = p.id_restaurant_fast_food_emplacement
+                JOIN RESTAURANTSFASTFOOD rf ON rf.id = erf.id_restaurant_fast_food
+                WHERE rf.est_supprime = false
+            `;
+
+            // Réappliquer les mêmes filtres pour le count
+            const countParams = [];
+            let countParamIndex = 1;
+
+            if (categorie) {
+                countQuery += ` AND p.categorie_produit = $${countParamIndex}`;
+                countParams.push(categorie);
+                countParamIndex++;
+            }
+
+            if (disponible !== undefined) {
+                countQuery += ` AND p.disponible = $${countParamIndex}`;
+                countParams.push(disponible === 'true');
+                countParamIndex++;
+            }
+
+            if (prix_min) {
+                countQuery += ` AND p.prix_produit >= $${countParamIndex}`;
+                countParams.push(parseFloat(prix_min));
+                countParamIndex++;
+            }
+
+            if (prix_max) {
+                countQuery += ` AND p.prix_produit <= $${countParamIndex}`;
+                countParams.push(parseFloat(prix_max));
+                countParamIndex++;
+            }
+
+            if (recherche) {
+                countQuery += ` AND (p.nom_produit ILIKE $${countParamIndex} OR p.description_produit ILIKE $${countParamIndex})`;
+                countParams.push(`%${recherche}%`);
+                countParamIndex++;
+            }
+
+            if (restaurant_id) {
+                countQuery += ` AND rf.id = $${countParamIndex}`;
+                countParams.push(parseInt(restaurant_id));
+                countParamIndex++;
+            }
+
+            if (emplacement_id) {
+                countQuery += ` AND erf.id = $${countParamIndex}`;
+                countParams.push(parseInt(emplacement_id));
+                countParamIndex++;
+            }
+
+            if (en_stock === 'true') {
+                countQuery += ` AND (p.stock_disponible = -1 OR p.stock_disponible > 0)`;
+            }
+
+            const countResult = await db.query(countQuery, countParams);
+
+            res.json({
+                success: true,
+                data: produits,
+                pagination: {
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    total: parseInt(countResult.rows[0].total),
+                    pages: Math.ceil(parseInt(countResult.rows[0].total) / limit)
+                },
+                filters: {
+                    appliques: {
+                        categorie: categorie || null,
+                        disponible: disponible || null,
+                        prix_min: prix_min || null,
+                        prix_max: prix_max || null,
+                        recherche: recherche || null,
+                        restaurant_id: restaurant_id || null,
+                        emplacement_id: emplacement_id || null,
+                        en_stock: en_stock === 'true'
+                    }
+                }
+            });
+
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    /**
+     * Récupérer les produits groupés par restaurant
+     * GET /api/v1/restauration/produits/by-restaurant
+     */
+    static async getProduitsByRestaurant(req, res, next) {
+        try {
+            const {
+                limit_par_restaurant = 10,
+                categorie,
+                disponible = 'true',
+                avec_promos = false
+            } = req.query;
+
+            const query = `
+                SELECT 
+                    rf.id as restaurant_id,
+                    rf.nom_restaurant_fast_food,
+                    rf.logo_restaurant,
+                    rf.description_restaurant_fast_food,
+                    (
+                        SELECT COUNT(*) 
+                        FROM EMPLACEMENTSRESTAURANTFASTFOOD erf2 
+                        WHERE erf2.id_restaurant_fast_food = rf.id
+                    ) as nombre_emplacements,
+                    (
+                        SELECT json_agg(json_build_object(
+                            'id', p.id,
+                            'nom', p.nom_produit,
+                            'description', p.description_produit,
+                            'photo', p.photo_produit,
+                            'prix', p.prix_produit,
+                            'categorie', p.categorie_produit,
+                            'stock', p.stock_disponible,
+                            'donnees', p.donnees_produit,
+                            'emplacement_id', erf.id,
+                            'emplacement_nom', erf.nom_emplacement,
+                            'promos', CASE WHEN $4 = 'true' THEN (
+                                SELECT json_agg(json_build_object(
+                                    'id', pr.id,
+                                    'nom', pr.nom_promo,
+                                    'type', pr.type_promo,
+                                    'reduction', COALESCE(pr.pourcentage_reduction, pr.montant_fixe_reduction)
+                                ))
+                                FROM PROMOSPRODUITS pp
+                                JOIN PROMOSRESTAURANTFASTFOOD pr ON pr.id = pp.promo_id
+                                WHERE pp.produit_id = p.id
+                                AND pr.actif = true
+                                AND pr.date_debut_promo <= NOW()
+                                AND pr.date_fin_promo >= NOW()
+                            ) ELSE '[]'::json END
+                        ) ORDER BY p.prix_produit)
+                        FROM (
+                            SELECT DISTINCT p.*, erf.nom_emplacement
+                            FROM PRODUITSINDIVIDUELRESTAURANT p
+                            JOIN EMPLACEMENTSRESTAURANTFASTFOOD erf ON erf.id = p.id_restaurant_fast_food_emplacement
+                            WHERE erf.id_restaurant_fast_food = rf.id
+                            AND p.disponible = CASE WHEN $1 = 'true' THEN true ELSE p.disponible END
+                            AND ($2 IS NULL OR p.categorie_produit = $2)
+                            ORDER BY p.prix_produit
+                            LIMIT $3
+                        ) p
+                    ) as produits
+                FROM RESTAURANTSFASTFOOD rf
+                WHERE rf.est_actif = true AND rf.est_supprime = false
+                ORDER BY rf.nom_restaurant_fast_food
+            `;
+
+            const result = await db.query(query, [
+                disponible,
+                categorie || null,
+                parseInt(limit_par_restaurant),
+                avec_promos === 'true' ? 'true' : 'false'
+            ]);
+
+            // Filtrer les restaurants qui ont des produits
+            const restaurantsAvecProduits = result.rows
+                .filter(r => r.produits && r.produits.length > 0)
+                .map(r => ({
+                    ...r,
+                    produits: r.produits.map(p => ({
+                        ...p,
+                        prix: parseFloat(p.prix),
+                        donnees: p.donnees || {},
+                        est_en_rupture: p.stock === 0,
+                        stock_illimite: p.stock === -1
+                    }))
+                }));
+
+            res.json({
+                success: true,
+                data: restaurantsAvecProduits,
+                total_restaurants: restaurantsAvecProduits.length,
+                total_produits: restaurantsAvecProduits.reduce((acc, r) => acc + r.produits.length, 0)
+            });
+
+        } catch (error) {
+            next(error);
+        }
+    }
+
+
+    /**
+     * Récupérer les produits par catégories globales
+     * GET /api/v1/restauration/produits/by-category
+     */
+    static async getProduitsByCategory(req, res, next) {
+        try {
+            const {
+                limit_par_categorie = 20,
+                disponible = 'true',
+                restaurant_id
+            } = req.query;
+
+            let query = `
+                WITH produits_filtres AS (
+                    SELECT 
+                        p.*,
+                        erf.nom_emplacement,
+                        rf.nom_restaurant_fast_food,
+                        rf.id as restaurant_id
+                    FROM PRODUITSINDIVIDUELRESTAURANT p
+                    JOIN EMPLACEMENTSRESTAURANTFASTFOOD erf ON erf.id = p.id_restaurant_fast_food_emplacement
+                    JOIN RESTAURANTSFASTFOOD rf ON rf.id = erf.id_restaurant_fast_food
+                    WHERE p.disponible = CASE WHEN $1 = 'true' THEN true ELSE p.disponible END
+                    ${restaurant_id ? ' AND rf.id = $2' : ''}
+                )
+                SELECT 
+                    categorie_produit,
+                    COUNT(*) as total_dans_categorie,
+                    json_agg(
+                        json_build_object(
+                            'id', id,
+                            'nom', nom_produit,
+                            'description', description_produit,
+                            'photo', photo_produit,
+                            'prix', prix_produit,
+                            'stock', stock_disponible,
+                            'restaurant_id', restaurant_id,
+                            'restaurant_nom', nom_restaurant_fast_food,
+                            'emplacement_nom', nom_emplacement
+                        ) ORDER BY prix_produit
+                    ) as produits
+                FROM produits_filtres
+                GROUP BY categorie_produit
+                ORDER BY categorie_produit
+            `;
+
+            const params = [disponible];
+            if (restaurant_id) {
+                params.push(parseInt(restaurant_id));
+            }
+
+            const result = await db.query(query, params);
+
+            // Limiter le nombre de produits par catégorie si nécessaire
+            const categories = result.rows.map(row => ({
+                categorie: row.categorie_produit,
+                total: parseInt(row.total_dans_categorie),
+                produits: row.produits.slice(0, parseInt(limit_par_categorie)).map(p => ({
+                    ...p,
+                    prix: parseFloat(p.prix),
+                    est_en_rupture: p.stock === 0
+                }))
+            }));
+
+            res.json({
+                success: true,
+                data: categories,
+                total_categories: categories.length
+            });
+
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    /**
+     * Récupérer les produits en promotion
+     * GET /api/v1/restauration/produits/en-promo
+     */
+    static async getProduitsEnPromo(req, res, next) {
+        try {
+            const {
+                page = 1,
+                limit = 20,
+                tri = 'remise_desc'
+            } = req.query;
+
+            const offset = (page - 1) * limit;
+
+            const query = `
+                SELECT 
+                    p.*,
+                    erf.nom_emplacement,
+                    rf.nom_restaurant_fast_food,
+                    rf.logo_restaurant,
+                    json_agg(json_build_object(
+                        'id', pr.id,
+                        'nom', pr.nom_promo,
+                        'type', pr.type_promo,
+                        'reduction_pourcentage', pr.pourcentage_reduction,
+                        'reduction_fixe', pr.montant_fixe_reduction,
+                        'date_fin', pr.date_fin_promo,
+                        'code', pr.code_promo
+                    )) as promos,
+                    MAX(
+                        CASE 
+                            WHEN pr.type_promo = 'POURCENTAGE' THEN pr.pourcentage_reduction
+                            WHEN pr.type_promo = 'MONTANT_FIXE' THEN (pr.montant_fixe_reduction / p.prix_produit * 100)
+                            ELSE 0
+                        END
+                    ) as remise_max_pourcentage
+                FROM PRODUITSINDIVIDUELRESTAURANT p
+                JOIN EMPLACEMENTSRESTAURANTFASTFOOD erf ON erf.id = p.id_restaurant_fast_food_emplacement
+                JOIN RESTAURANTSFASTFOOD rf ON rf.id = erf.id_restaurant_fast_food
+                JOIN PROMOSPRODUITS pp ON pp.produit_id = p.id
+                JOIN PROMOSRESTAURANTFASTFOOD pr ON pr.id = pp.promo_id
+                WHERE pr.actif = true
+                AND pr.date_debut_promo <= NOW()
+                AND pr.date_fin_promo >= NOW()
+                AND p.disponible = true
+                GROUP BY p.id, erf.id, rf.id
+            `;
+
+            let orderBy = '';
+            switch (tri) {
+                case 'remise_desc':
+                    orderBy = ' ORDER BY remise_max_pourcentage DESC';
+                    break;
+                case 'remise_asc':
+                    orderBy = ' ORDER BY remise_max_pourcentage ASC';
+                    break;
+                case 'prix_asc':
+                    orderBy = ' ORDER BY MIN(p.prix_produit) ASC';
+                    break;
+                case 'date_fin_asc':
+                    orderBy = ' ORDER BY MIN(pr.date_fin_promo) ASC';
+                    break;
+                default:
+                    orderBy = ' ORDER BY remise_max_pourcentage DESC';
+            }
+
+            const fullQuery = query + orderBy + ` LIMIT $1 OFFSET $2`;
+            const result = await db.query(fullQuery, [limit, offset]);
+
+            // Compter le total
+            const countResult = await db.query(`
+                SELECT COUNT(DISTINCT p.id) as total
+                FROM PRODUITSINDIVIDUELRESTAURANT p
+                JOIN PROMOSPRODUITS pp ON pp.produit_id = p.id
+                JOIN PROMOSRESTAURANTFASTFOOD pr ON pr.id = pp.promo_id
+                WHERE pr.actif = true
+                AND pr.date_debut_promo <= NOW()
+                AND pr.date_fin_promo >= NOW()
+                AND p.disponible = true
+            `);
+
+            const produits = result.rows.map(p => ({
+                ...p,
+                prix_produit: parseFloat(p.prix_produit),
+                prix_avec_promo: p.promos[0]?.type_promo === 'POURCENTAGE' 
+                    ? p.prix_produit * (1 - p.promos[0].reduction_pourcentage / 100)
+                    : p.prix_produit - (p.promos[0]?.reduction_fixe || 0),
+                remise_pourcentage: p.remise_max_pourcentage
+            }));
+
+            res.json({
+                success: true,
+                data: produits,
+                pagination: {
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    total: parseInt(countResult.rows[0].total),
+                    pages: Math.ceil(parseInt(countResult.rows[0].total) / limit)
+                }
+            });
+
+        } catch (error) {
+            next(error);
+        }
+    }
+    /**
+     * Récupérer les statistiques globales des produits
+     * GET /api/v1/restauration/produits/global-stats
+     */
+    static async getGlobalStats(req, res, next) {
+        try {
+            const query = `
+                WITH stats_globales AS (
+                    SELECT 
+                        COUNT(DISTINCT p.id) as total_produits,
+                        COUNT(DISTINCT rf.id) as total_restaurants,
+                        COUNT(DISTINCT erf.id) as total_emplacements,
+                        COUNT(DISTINCT p.categorie_produit) as total_categories,
+                        COUNT(*) FILTER (WHERE p.disponible = true) as produits_disponibles,
+                        COUNT(*) FILTER (WHERE p.disponible = false) as produits_indisponibles,
+                        AVG(p.prix_produit)::numeric(10,2) as prix_moyen_global,
+                        MIN(p.prix_produit) as prix_min_global,
+                        MAX(p.prix_produit) as prix_max_global,
+                        COUNT(*) FILTER (WHERE p.est_journalier = true) as produits_journaliers,
+                        COUNT(*) FILTER (WHERE p.stock_disponible = 0) as produits_en_rupture,
+                        COUNT(*) FILTER (WHERE p.stock_disponible = -1) as produits_stock_illimite
+                    FROM PRODUITSINDIVIDUELRESTAURANT p
+                    JOIN EMPLACEMENTSRESTAURANTFASTFOOD erf ON erf.id = p.id_restaurant_fast_food_emplacement
+                    JOIN RESTAURANTSFASTFOOD rf ON rf.id = erf.id_restaurant_fast_food
+                    WHERE rf.est_supprime = false
+                ),
+                stats_par_categorie AS (
+                    SELECT 
+                        p.categorie_produit,
+                        COUNT(*) as total,
+                        AVG(p.prix_produit)::numeric(10,2) as prix_moyen,
+                        COUNT(*) FILTER (WHERE p.disponible = true) as disponibles,
+                        COUNT(*) FILTER (WHERE p.stock_disponible = 0) as en_rupture
+                    FROM PRODUITSINDIVIDUELRESTAURANT p
+                    JOIN EMPLACEMENTSRESTAURANTFASTFOOD erf ON erf.id = p.id_restaurant_fast_food_emplacement
+                    JOIN RESTAURANTSFASTFOOD rf ON rf.id = erf.id_restaurant_fast_food
+                    WHERE rf.est_supprime = false
+                    GROUP BY p.categorie_produit
+                    ORDER BY total DESC
+                ),
+                top_restaurants AS (
+                    SELECT 
+                        rf.id,
+                        rf.nom_restaurant_fast_food,
+                        rf.logo_restaurant,
+                        COUNT(p.id) as nombre_produits,
+                        AVG(p.prix_produit)::numeric(10,2) as prix_moyen,
+                        COUNT(p.id) FILTER (WHERE p.disponible = true) as produits_disponibles
+                    FROM RESTAURANTSFASTFOOD rf
+                    LEFT JOIN EMPLACEMENTSRESTAURANTFASTFOOD erf ON erf.id_restaurant_fast_food = rf.id
+                    LEFT JOIN PRODUITSINDIVIDUELRESTAURANT p ON p.id_restaurant_fast_food_emplacement = erf.id
+                    WHERE rf.est_actif = true AND rf.est_supprime = false
+                    GROUP BY rf.id, rf.nom_restaurant_fast_food, rf.logo_restaurant
+                    ORDER BY nombre_produits DESC
+                    LIMIT 5
+                ),
+                tendances_prix AS (
+                    SELECT 
+                        PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY p.prix_produit) as prix_quartile_1,
+                        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY p.prix_produit) as prix_median,
+                        PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY p.prix_produit) as prix_quartile_3,
+                        MODE() WITHIN GROUP (ORDER BY p.categorie_produit) as categorie_plus_commune
+                    FROM PRODUITSINDIVIDUELRESTAURANT p
+                    JOIN EMPLACEMENTSRESTAURANTFASTFOOD erf ON erf.id = p.id_restaurant_fast_food_emplacement
+                    JOIN RESTAURANTSFASTFOOD rf ON rf.id = erf.id_restaurant_fast_food
+                    WHERE rf.est_supprime = false
+                )
+                SELECT 
+                    json_build_object(
+                        'global', (SELECT row_to_json(sg) FROM stats_globales sg),
+                        'par_categorie', (SELECT json_agg(sc) FROM stats_par_categorie sc),
+                        'top_restaurants', (SELECT json_agg(tr) FROM top_restaurants tr),
+                        'tendances_prix', (SELECT row_to_json(tp) FROM tendances_prix tp)
+                    ) as stats
+            `;
+
+            const result = await db.query(query);
+
+            res.json({
+                success: true,
+                data: result.rows[0]?.stats || {
+                    global: {
+                        total_produits: 0,
+                        total_restaurants: 0,
+                        total_emplacements: 0,
+                        total_categories: 0,
+                        produits_disponibles: 0,
+                        produits_indisponibles: 0,
+                        prix_moyen_global: 0,
+                        prix_min_global: 0,
+                        prix_max_global: 0,
+                        produits_journaliers: 0,
+                        produits_en_rupture: 0,
+                        produits_stock_illimite: 0
+                    },
+                    par_categorie: [],
+                    top_restaurants: [],
+                    tendances_prix: {}
+                }
+            });
+
+        } catch (error) {
+            next(error);
+        }
+    }
+
     /**
      * Récupérer tous les produits d'un emplacement
      * GET /api/v1/restauration/emplacements/:emplacementId/produits

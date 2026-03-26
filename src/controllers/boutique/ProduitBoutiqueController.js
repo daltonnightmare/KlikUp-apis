@@ -1,5 +1,5 @@
 // src/controllers/boutique/ProduitBoutiqueController.js
-const pool = require('../../configuration/database');
+const db = require('../../configuration/database');
 const { AppError } = require('../../utils/errors/AppError');
 const { ValidationError } = require('../../utils/errors/AppError');
 const FileService = require('../../services/file/FileService');
@@ -15,7 +15,7 @@ class ProduitBoutiqueController {
      * @access ADMINISTRATEUR_PLATEFORME, PROPRIETAIRE_BOUTIQUE, STAFF_BOUTIQUE
      */
     async create(req, res, next) {
-        const client = await pool.connect();
+        const client = await db.getClient();
         try {
             await client.query('BEGIN');
             
@@ -148,6 +148,7 @@ class ProduitBoutiqueController {
      * @access PUBLIC
      */
     async findAll(req, res, next) {
+        const client = await db.getClient();
         try {
             const { boutiqueId } = req.params;
             const {
@@ -257,7 +258,7 @@ class ProduitBoutiqueController {
 
             params.push(parseInt(limit), offset);
 
-            const result = await pool.query(query, params);
+            const result = await client.query(query, params);
 
             // 4. COMPTAGE TOTAL
             let countQuery = `
@@ -265,11 +266,11 @@ class ProduitBoutiqueController {
                 FROM PRODUITSBOUTIQUE p
                 WHERE ${conditions.join(' AND ')}
             `;
-            const countResult = await pool.query(countQuery, params.slice(0, -2));
+            const countResult = await client.query(countQuery, params.slice(0, -2));
             const total = parseInt(countResult.rows[0].count);
 
             // 5. AGRÉGATION DES FILTRES POUR RÉPONSE
-            const filters = await this._getAvailableFilters(boutiqueId, conditions, params.slice(0, -2));
+            const filters = await this._getAvailableFilters(client, boutiqueId);
 
             // 6. ENRICHISSEMENT DES PRODUITS (optionnel)
             let produits = result.rows;
@@ -289,17 +290,24 @@ class ProduitBoutiqueController {
                     has_prev: page > 1
                 },
                 filters: filters,
-                summary: {
+                summary: produits.length > 0 ? {
                     total_produits: total,
                     produits_disponibles: produits.filter(p => p.est_disponible).length,
                     prix_min: Math.min(...produits.map(p => p.prix_unitaire_produit)),
                     prix_max: Math.max(...produits.map(p => p.prix_unitaire_produit))
+                } : {
+                    total_produits: 0,
+                    produits_disponibles: 0,
+                    prix_min: 0,
+                    prix_max: 0
                 }
             });
 
         } catch (error) {
             logError('Erreur récupération produits:', error);
             next(error);
+        } finally {
+            client.release();
         }
     }
 
@@ -309,6 +317,7 @@ class ProduitBoutiqueController {
      * @access PUBLIC
      */
     async findById(req, res, next) {
+        const client = await db.getClient();
         try {
             const { identifier } = req.params;
             const { inclure_avis, inclure_similaires, inclure_recommandations } = req.query;
@@ -330,7 +339,7 @@ class ProduitBoutiqueController {
                 ? 'SELECT * FROM PRODUITSBOUTIQUE WHERE slug_produit = $1'
                 : 'SELECT * FROM PRODUITSBOUTIQUE WHERE id = $1';
 
-            const result = await pool.query(query, [identifier]);
+            const result = await client.query(query, [identifier]);
 
             if (result.rows.length === 0) {
                 throw new AppError('Produit non trouvé', 404);
@@ -348,13 +357,13 @@ class ProduitBoutiqueController {
                 recommandations,
                 questionsReponses
             ] = await Promise.all([
-                this._getCategorie(produit.id_categorie),
-                this._getBoutique(produit.id_boutique),
-                inclure_avis === 'true' ? this._getAvisProduit(produit.id) : [],
-                inclure_avis === 'true' ? this._getStatsAvis(produit.id) : null,
-                inclure_similaires === 'true' ? this._getProduitsSimilaires(produit) : [],
-                inclure_recommandations === 'true' ? this._getRecommandations(produit) : [],
-                this._getQuestionsReponses(produit.id)
+                this._getCategorie(client, produit.id_categorie),
+                this._getBoutique(client, produit.id_boutique),
+                inclure_avis === 'true' ? this._getAvisProduit(client, produit.id) : [],
+                inclure_avis === 'true' ? this._getStatsAvis(client, produit.id) : null,
+                inclure_similaires === 'true' ? this._getProduitsSimilaires(client, produit) : [],
+                inclure_recommandations === 'true' ? this._getRecommandations(client, produit) : [],
+                this._getQuestionsReponses(client, produit.id)
             ]);
 
             // 4. ENRICHISSEMENT DES DONNÉES
@@ -388,7 +397,7 @@ class ProduitBoutiqueController {
             // 5. MISE EN CACHE
             await CacheService.set(cacheKey, produitEnrichi, 300); // 5 minutes
 
-            // 6. INCRÉMENTATION COMPTEUR VUES (asynchrone)
+            // 6. INCRÉMENTATION COMPTEUR VUES (asynchrone - ne pas attendre)
             this._incrementViewCount(produit.id).catch(err => 
                 logError('Erreur incrémentation vues:', err)
             );
@@ -401,6 +410,8 @@ class ProduitBoutiqueController {
         } catch (error) {
             logError('Erreur récupération produit:', error);
             next(error);
+        } finally {
+            client.release();
         }
     }
 
@@ -410,7 +421,7 @@ class ProduitBoutiqueController {
      * @access ADMINISTRATEUR_PLATEFORME, PROPRIETAIRE_BOUTIQUE, STAFF_BOUTIQUE
      */
     async update(req, res, next) {
-        const client = await pool.connect();
+        const client = await db.getClient();
         try {
             await client.query('BEGIN');
             
@@ -503,7 +514,7 @@ class ProduitBoutiqueController {
      * @access ADMINISTRATEUR_PLATEFORME, PROPRIETAIRE_BOUTIQUE, STAFF_BOUTIQUE
      */
     async updateStock(req, res, next) {
-        const client = await pool.connect();
+        const client = await db.getClient();
         try {
             await client.query('BEGIN');
             
@@ -629,6 +640,7 @@ class ProduitBoutiqueController {
      * @access PUBLIC
      */
     async search(req, res, next) {
+        const client = await db.getClient();
         try {
             const {
                 q,
@@ -654,7 +666,6 @@ class ProduitBoutiqueController {
 
             // 1. RECHERCHE PLEIN TEXTE
             if (q) {
-                // Configuration de la recherche plein texte avec PostgreSQL
                 fullTextSearch = `
                     , ts_rank(to_tsvector('french', 
                         coalesce(p.nom_produit,'') || ' ' || 
@@ -741,7 +752,7 @@ class ProduitBoutiqueController {
 
             params.push(parseInt(limit), offset);
 
-            const result = await pool.query(query, params);
+            const result = await client.query(query, params);
 
             // 5. COMPTAGE
             let countQuery = `
@@ -750,7 +761,7 @@ class ProduitBoutiqueController {
                 ${geoJoin}
                 WHERE ${conditions.join(' AND ')}
             `;
-            const countResult = await pool.query(countQuery, params.slice(0, -2));
+            const countResult = await client.query(countQuery, params.slice(0, -2));
             const total = parseInt(countResult.rows[0].count);
 
             // 6. AGRÉGATION DES RÉSULTATS PAR BOUTIQUE (optionnel)
@@ -762,7 +773,7 @@ class ProduitBoutiqueController {
             // 7. SUGGESTIONS DE RECHERCHE
             let suggestions = [];
             if (q && produits.length === 0) {
-                suggestions = await this._getSearchSuggestions(q);
+                suggestions = await this._getSearchSuggestions(client, q);
             }
 
             res.json({
@@ -792,6 +803,8 @@ class ProduitBoutiqueController {
         } catch (error) {
             logError('Erreur recherche produits:', error);
             next(error);
+        } finally {
+            client.release();
         }
     }
 
@@ -801,6 +814,7 @@ class ProduitBoutiqueController {
      * @access PUBLIC
      */
     async getPromotions(req, res, next) {
+        const client = await db.getClient();
         try {
             const {
                 boutique_id,
@@ -846,10 +860,10 @@ class ProduitBoutiqueController {
 
             params.push(parseInt(limit), offset);
 
-            const result = await pool.query(query, params);
+            const result = await client.query(query, params);
 
             // Statistiques des promotions
-            const stats = await pool.query(`
+            const statsQuery = `
                 SELECT 
                     COUNT(*) as total_promos,
                     ROUND(AVG(((p.prix_unitaire_produit - p.prix_promo) / p.prix_unitaire_produit * 100))::NUMERIC, 2) as reduction_moyenne,
@@ -857,7 +871,9 @@ class ProduitBoutiqueController {
                     MAX(p.prix_promo) as prix_max
                 FROM PRODUITSBOUTIQUE p
                 WHERE ${conditions.join(' AND ')}
-            `, params.slice(0, -2));
+            `;
+            const statsResult = await client.query(statsQuery, params.slice(0, -2));
+            const total = parseInt(statsResult.rows[0].total_promos);
 
             res.json({
                 status: 'success',
@@ -865,14 +881,17 @@ class ProduitBoutiqueController {
                 pagination: {
                     page: parseInt(page),
                     limit: parseInt(limit),
-                    total: parseInt(stats.rows[0].total_promos)
+                    total: total,
+                    pages: Math.ceil(total / limit)
                 },
-                stats: stats.rows[0]
+                stats: statsResult.rows[0]
             });
 
         } catch (error) {
             logError('Erreur récupération promotions:', error);
             next(error);
+        } finally {
+            client.release();
         }
     }
 
@@ -882,7 +901,7 @@ class ProduitBoutiqueController {
      * @access ADMINISTRATEUR_PLATEFORME, PROPRIETAIRE_BOUTIQUE
      */
     async deleteImage(req, res, next) {
-        const client = await pool.connect();
+        const client = await db.getClient();
         try {
             await client.query('BEGIN');
             
@@ -949,7 +968,7 @@ class ProduitBoutiqueController {
      * @access ADMINISTRATEUR_PLATEFORME, PROPRIETAIRE_BOUTIQUE
      */
     async duplicate(req, res, next) {
-        const client = await pool.connect();
+        const client = await db.getClient();
         try {
             await client.query('BEGIN');
             
@@ -1035,7 +1054,7 @@ class ProduitBoutiqueController {
      * @access ADMINISTRATEUR_PLATEFORME, PROPRIETAIRE_BOUTIQUE
      */
     async delete(req, res, next) {
-        const client = await pool.connect();
+        const client = await db.getClient();
         try {
             await client.query('BEGIN');
             
@@ -1221,7 +1240,7 @@ class ProduitBoutiqueController {
         if (files?.image_principale) {
             result.image_principale = await FileService.uploadImage(files.image_principale, {
                 path: `boutiques/${boutiqueId}/produits`,
-                maxSize: 5 * 1024 * 1024, // 5MB
+                maxSize: 5 * 1024 * 1024,
                 allowedTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/avif'],
                 generateThumbnail: true,
                 thumbnailSizes: [
@@ -1352,7 +1371,6 @@ class ProduitBoutiqueController {
                 setClauses.push(`${champ} = $${values.length + 1}`);
                 
                 if (champ === 'donnees_supplementaires') {
-                    // Fusion avec les données existantes
                     const merged = {
                         ...(ancienProduit.donnees_supplementaires || {}),
                         ...updates[champ],
@@ -1461,8 +1479,7 @@ class ProduitBoutiqueController {
      * Notifier les abonnés d'un changement de prix
      */
     async _notifyPriceChange(ancien, nouveau) {
-        // Récupérer les utilisateurs ayant mis ce produit en favori
-        const favoris = await pool.query(
+        const favoris = await db.query(
             `SELECT compte_id FROM FAVORIS_PRODUITS 
              WHERE produit_id = $1 AND notifications_actives = true`,
             [nouveau.id]
@@ -1517,8 +1534,8 @@ class ProduitBoutiqueController {
     /**
      * Récupérer une catégorie
      */
-    async _getCategorie(categorieId) {
-        const result = await pool.query(
+    async _getCategorie(client, categorieId) {
+        const result = await client.query(
             'SELECT id, nom_categorie, slug_categorie, description_categorie FROM CATEGORIES_BOUTIQUE WHERE id = $1',
             [categorieId]
         );
@@ -1528,8 +1545,8 @@ class ProduitBoutiqueController {
     /**
      * Récupérer une boutique
      */
-    async _getBoutique(boutiqueId) {
-        const result = await pool.query(
+    async _getBoutique(client, boutiqueId) {
+        const result = await client.query(
             'SELECT id, nom_boutique, logo_boutique, est_actif FROM BOUTIQUES WHERE id = $1',
             [boutiqueId]
         );
@@ -1539,8 +1556,8 @@ class ProduitBoutiqueController {
     /**
      * Récupérer les avis d'un produit
      */
-    async _getAvisProduit(produitId, limit = 10) {
-        const result = await pool.query(
+    async _getAvisProduit(client, produitId, limit = 10) {
+        const result = await client.query(
             `SELECT 
                 a.*,
                 c.nom_utilisateur_compte,
@@ -1561,8 +1578,8 @@ class ProduitBoutiqueController {
     /**
      * Récupérer les statistiques d'avis
      */
-    async _getStatsAvis(produitId) {
-        const result = await pool.query(
+    async _getStatsAvis(client, produitId) {
+        const result = await client.query(
             `SELECT 
                 COUNT(*) as total,
                 ROUND(AVG(note_globale)::NUMERIC, 2) as moyenne,
@@ -1585,8 +1602,8 @@ class ProduitBoutiqueController {
     /**
      * Récupérer les produits similaires
      */
-    async _getProduitsSimilaires(produit, limit = 6) {
-        const result = await pool.query(
+    async _getProduitsSimilaires(client, produit, limit = 6) {
+        const result = await client.query(
             `SELECT 
                 id, nom_produit, slug_produit, image_produit,
                 prix_unitaire_produit, prix_promo,
@@ -1605,9 +1622,8 @@ class ProduitBoutiqueController {
     /**
      * Récupérer les recommandations personnalisées
      */
-    async _getRecommandations(produit, limit = 4) {
-        // Logique de recommandation basée sur les achats combinés fréquents
-        const result = await pool.query(
+    async _getRecommandations(client, produit, limit = 4) {
+        const result = await client.query(
             `WITH achats_combines AS (
                 SELECT 
                     jsonb_array_elements(donnees_commandes)->>'produit_id' as produit_achete,
@@ -1638,7 +1654,7 @@ class ProduitBoutiqueController {
     /**
      * Récupérer les questions/réponses sur le produit
      */
-    async _getQuestionsReponses(produitId, limit = 5) {
+    async _getQuestionsReponses(client, produitId, limit = 5) {
         // Table à créer si nécessaire
         return [];
     }
@@ -1647,7 +1663,7 @@ class ProduitBoutiqueController {
      * Incrémenter le compteur de vues
      */
     async _incrementViewCount(produitId) {
-        await pool.query(
+        await db.query(
             `UPDATE PRODUITSBOUTIQUE 
              SET nombre_vues = COALESCE(nombre_vues, 0) + 1
              WHERE id = $1`,
@@ -1744,9 +1760,9 @@ class ProduitBoutiqueController {
     /**
      * Récupérer les filtres disponibles
      */
-    async _getAvailableFilters(boutiqueId, conditions, params) {
+    async _getAvailableFilters(client, boutiqueId) {
         const [categories, prixExtremes] = await Promise.all([
-            pool.query(
+            client.query(
                 `SELECT DISTINCT 
                     c.id, c.nom_categorie, 
                     COUNT(p.id) as nombre_produits
@@ -1756,7 +1772,7 @@ class ProduitBoutiqueController {
                 GROUP BY c.id, c.nom_categorie`,
                 [boutiqueId]
             ),
-            pool.query(
+            client.query(
                 `SELECT 
                     MIN(prix_unitaire_produit) as prix_min,
                     MAX(prix_unitaire_produit) as prix_max
@@ -1780,8 +1796,8 @@ class ProduitBoutiqueController {
     /**
      * Obtenir des suggestions de recherche
      */
-    async _getSearchSuggestions(query) {
-        const result = await pool.query(
+    async _getSearchSuggestions(client, query) {
+        const result = await client.query(
             `SELECT nom_produit, slug_produit
              FROM PRODUITSBOUTIQUE
              WHERE nom_produit ILIKE $1

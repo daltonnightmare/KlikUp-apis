@@ -16,6 +16,11 @@ const CatalogueController = require('../../controllers/public/CatalogueControlle
 const GeoController = require('../../controllers/public/GeoController');
 const StatsPubliquesController = require('../../controllers/public/StatsPubliquesController');
 const HealthController = require('../../controllers/public/HealthController');
+const catalogueRestaurants = require('../../controllers/public/CatalogueRestaurantController');
+const catalogueBoutiques = require('../../controllers/public/CatalogueBoutiqueController');
+const catalogueTransport = require('../../controllers/public/CatalogueTransportController');
+const commandesPubliques = require('../../controllers/public/CommandesPubliqueController');
+const avisPubliques = require('../../controllers/public/AvisPublique');
 
 // ==================== I. SANTÉ ET MONITORING ====================
 // Routes de health check (sans authentification, rate limiting léger)
@@ -316,5 +321,36 @@ router.get('/stats/evolution',
     ]),
     StatsPubliquesController.getEvolution.bind(StatsPubliquesController)
 );
+
+// Routes Restaurants
+router.get('/restaurants', catalogueRestaurants.listRestaurants);
+router.get('/restaurants/:id', catalogueRestaurants.getRestaurantDetails);
+router.get('/emplacements/:id/menus', catalogueRestaurants.getMenusByEmplacement);
+router.get('/menus/:id', catalogueRestaurants.getMenuDetails);
+
+// Routes Boutiques
+router.get('/boutiques', catalogueBoutiques.listBoutiques);
+router.get('/boutiques/:id', catalogueBoutiques.getBoutiqueDetails);
+router.get('/boutiques/:id/produits', catalogueBoutiques.getProduitsByBoutique);
+router.get('/produits/:id', catalogueBoutiques.getProduitDetails);
+
+// Routes Transport
+router.get('/transport/compagnies', catalogueTransport.listCompagnies);
+router.get('/transport/compagnies/:id', catalogueTransport.getCompagnieDetails);
+router.get('/transport/emplacements/:id/tickets', catalogueTransport.getTicketsByEmplacement);
+router.get('/transport/tickets/:id', catalogueTransport.getTicketDetails);
+router.get('/transport/itineraires', catalogueTransport.searchItineraires);
+
+// Routes Commandes (sans compte)
+router.post('/commandes/restaurant', commandesPubliques.createCommandeRestaurant);
+router.post('/commandes/boutique', commandesPubliques.createCommandeBoutique);
+router.get('/commandes/suivi/:reference', commandesPubliques.suivreCommande);
+router.post('/commandes/:reference/annuler', commandesPubliques.annulerCommande);
+
+// Routes Avis
+router.get('/avis', avisPubliques.listAvis);
+router.get('/avis/verifier', avisPubliques.checkCanLeaveAvis);
+router.post('/avis', avisPubliques.createAvis);
+
 
 module.exports = router;

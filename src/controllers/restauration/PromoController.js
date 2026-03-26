@@ -4,6 +4,545 @@ const AuditService = require('../../services/audit/AuditService');
 const { ENUM_TYPES_PROMO } = require('../../utils/constants/enums');
 
 class PromoController {
+
+
+    /**
+     * Récupérer toutes les promotions (version enrichie)
+     * GET /api/v1/restauration/promos/all
+     */
+    static async getAllPromos(req, res, next) {
+        try {
+            const {
+                page = 1,
+                limit = 20,
+                actif,
+                type_promo,
+                restaurant_id,
+                emplacement_id,
+                recherche,
+                statut_temporel, // 'en_cours', 'a_venir', 'expiree'
+                tri = 'date_creation_desc',
+                avec_produits_menus = false
+            } = req.query;
+
+            const offset = (page - 1) * limit;
+
+            let query = `
+                SELECT 
+                    pr.id, 
+                    pr.nom_promo,
+                    pr.description_promo,
+                    pr.code_promo,
+                    pr.type_promo,
+                    pr.pourcentage_reduction,
+                    pr.montant_fixe_reduction,
+                    pr.date_debut_promo,
+                    pr.date_fin_promo,
+                    pr.utilisation_max,
+                    pr.utilisation_count,
+                    pr.actif,
+                    pr.produits_affectes,
+                    pr.date_creation,
+                    pr.date_mise_a_jour,
+                    pr.id_restaurant_fast_food_emplacement,
+                    erf.id as emplacement_id,
+                    erf.nom_emplacement,
+                    erf.adresse_complete,
+                    erf.frais_livraison,
+                    rf.id as restaurant_id,
+                    rf.nom_restaurant_fast_food,
+                    rf.logo_restaurant
+            `;
+
+            // Ajouter les produits et menus associés si demandé
+            if (avec_produits_menus === 'true') {
+                query += `,
+                    (
+                        SELECT json_agg(json_build_object(
+                            'id', m.id,
+                            'nom', m.nom_menu,
+                            'prix', m.prix_menu,
+                            'photo', m.photo_menu,
+                            'categorie', m.categorie_menu,
+                            'disponible', m.disponible
+                        ))
+                        FROM PROMOSMENUS pm
+                        JOIN MENURESTAURANTFASTFOOD m ON m.id = pm.menu_id
+                        WHERE pm.promo_id = pr.id
+                    ) as menus_associes,
+                    (
+                        SELECT json_agg(json_build_object(
+                            'id', p.id,
+                            'nom', p.nom_produit,
+                            'prix', p.prix_produit,
+                            'photo', p.photo_produit,
+                            'categorie', p.categorie_produit,
+                            'disponible', p.disponible
+                        ))
+                        FROM PROMOSPRODUITS pp
+                        JOIN PRODUITSINDIVIDUELRESTAURANT p ON p.id = pp.produit_id
+                        WHERE pp.promo_id = pr.id
+                    ) as produits_associes
+                `;
+            }
+
+            query += `
+                FROM PROMOSRESTAURANTFASTFOOD pr
+                LEFT JOIN EMPLACEMENTSRESTAURANTFASTFOOD erf ON erf.id = pr.id_restaurant_fast_food_emplacement
+                LEFT JOIN RESTAURANTSFASTFOOD rf ON rf.id = erf.id_restaurant_fast_food
+                WHERE rf.est_supprime = false
+            `;
+
+            const params = [];
+            let paramIndex = 1;
+
+            // Filtres optionnels
+            if (actif !== undefined) {
+                query += ` AND pr.actif = $${paramIndex}`;
+                params.push(actif === 'true');
+                paramIndex++;
+            }
+
+            if (type_promo) {
+                query += ` AND pr.type_promo = $${paramIndex}`;
+                params.push(type_promo);
+                paramIndex++;
+            }
+
+            if (restaurant_id) {
+                query += ` AND rf.id = $${paramIndex}`;
+                params.push(parseInt(restaurant_id));
+                paramIndex++;
+            }
+
+            if (emplacement_id) {
+                query += ` AND pr.id_restaurant_fast_food_emplacement = $${paramIndex}`;
+                params.push(parseInt(emplacement_id));
+                paramIndex++;
+            }
+
+            if (recherche) {
+                query += ` AND (pr.nom_promo ILIKE $${paramIndex} OR pr.code_promo ILIKE $${paramIndex} OR pr.description_promo ILIKE $${paramIndex})`;
+                params.push(`%${recherche}%`);
+                paramIndex++;
+            }
+
+            // Filtre temporel
+            const maintenant = new Date().toISOString();
+            if (statut_temporel) {
+                switch (statut_temporel) {
+                    case 'en_cours':
+                        query += ` AND pr.date_debut_promo <= $${paramIndex}::timestamp AND pr.date_fin_promo >= $${paramIndex}::timestamp`;
+                        params.push(maintenant);
+                        paramIndex++;
+                        break;
+                    case 'a_venir':
+                        query += ` AND pr.date_debut_promo > $${paramIndex}::timestamp`;
+                        params.push(maintenant);
+                        paramIndex++;
+                        break;
+                    case 'expiree':
+                        query += ` AND pr.date_fin_promo < $${paramIndex}::timestamp`;
+                        params.push(maintenant);
+                        paramIndex++;
+                        break;
+                }
+            }
+
+            // Tri
+            switch (tri) {
+                case 'date_debut_asc':
+                    query += ` ORDER BY pr.date_debut_promo ASC`;
+                    break;
+                case 'date_debut_desc':
+                    query += ` ORDER BY pr.date_debut_promo DESC`;
+                    break;
+                case 'date_fin_asc':
+                    query += ` ORDER BY pr.date_fin_promo ASC`;
+                    break;
+                case 'date_fin_desc':
+                    query += ` ORDER BY pr.date_fin_promo DESC`;
+                    break;
+                case 'utilisation_desc':
+                    query += ` ORDER BY pr.utilisation_count DESC`;
+                    break;
+                case 'utilisation_asc':
+                    query += ` ORDER BY pr.utilisation_count ASC`;
+                    break;
+                case 'reduction_desc':
+                    query += ` ORDER BY COALESCE(pr.pourcentage_reduction, pr.montant_fixe_reduction) DESC NULLS LAST`;
+                    break;
+                case 'restaurant_asc':
+                    query += ` ORDER BY rf.nom_restaurant_fast_food ASC, pr.date_debut_promo DESC`;
+                    break;
+                case 'nom_asc':
+                    query += ` ORDER BY pr.nom_promo ASC`;
+                    break;
+                default:
+                    query += ` ORDER BY pr.date_creation DESC`;
+            }
+
+            // Pagination
+            query += ` LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+            params.push(parseInt(limit), offset);
+
+            const result = await db.query(query, params);
+
+            // Traiter les résultats
+            const maintenantDate = new Date();
+            const promos = result.rows.map(promo => {
+                const dateDebut = new Date(promo.date_debut_promo);
+                const dateFin = new Date(promo.date_fin_promo);
+                
+                // Calculer le statut détaillé
+                const estEnCours = promo.actif && dateDebut <= maintenantDate && dateFin >= maintenantDate;
+                const estAVenir = promo.actif && dateDebut > maintenantDate;
+                const estExpiree = dateFin < maintenantDate;
+                const utilisationsRestantes = promo.utilisation_max === -1 ? 'Illimité' : promo.utilisation_max - promo.utilisation_count;
+                
+                const processed = {
+                    ...promo,
+                    pourcentage_reduction: promo.pourcentage_reduction ? parseFloat(promo.pourcentage_reduction) : null,
+                    montant_fixe_reduction: promo.montant_fixe_reduction ? parseFloat(promo.montant_fixe_reduction) : null,
+                    produits_affectes: promo.produits_affectes || [],
+                    statut: {
+                        actif: promo.actif,
+                        en_cours: estEnCours,
+                        a_venir: estAVenir,
+                        expiree: estExpiree,
+                        utilisations_restantes: utilisationsRestantes,
+                        jours_restants: estEnCours ? Math.ceil((dateFin - maintenantDate) / (1000 * 60 * 60 * 24)) : 0,
+                        jours_avant_debut: estAVenir ? Math.ceil((dateDebut - maintenantDate) / (1000 * 60 * 60 * 24)) : 0
+                    }
+                };
+
+                // Parser les menus et produits associés
+                if (promo.menus_associes && typeof promo.menus_associes === 'string') {
+                    try {
+                        processed.menus_associes = JSON.parse(promo.menus_associes);
+                    } catch (e) {
+                        processed.menus_associes = [];
+                    }
+                }
+
+                if (promo.produits_associes && typeof promo.produits_associes === 'string') {
+                    try {
+                        processed.produits_associes = JSON.parse(promo.produits_associes);
+                    } catch (e) {
+                        processed.produits_associes = [];
+                    }
+                }
+
+                return processed;
+            });
+
+            // Compter le total pour la pagination
+            let countQuery = `
+                SELECT COUNT(*) as total 
+                FROM PROMOSRESTAURANTFASTFOOD pr
+                LEFT JOIN EMPLACEMENTSRESTAURANTFASTFOOD erf ON erf.id = pr.id_restaurant_fast_food_emplacement
+                LEFT JOIN RESTAURANTSFASTFOOD rf ON rf.id = erf.id_restaurant_fast_food
+                WHERE rf.est_supprime = false
+            `;
+
+            const countParams = [];
+            let countParamIndex = 1;
+
+            // Réappliquer les mêmes filtres pour le count
+            if (actif !== undefined) {
+                countQuery += ` AND pr.actif = $${countParamIndex}`;
+                countParams.push(actif === 'true');
+                countParamIndex++;
+            }
+
+            if (type_promo) {
+                countQuery += ` AND pr.type_promo = $${countParamIndex}`;
+                countParams.push(type_promo);
+                countParamIndex++;
+            }
+
+            if (restaurant_id) {
+                countQuery += ` AND rf.id = $${countParamIndex}`;
+                countParams.push(parseInt(restaurant_id));
+                countParamIndex++;
+            }
+
+            if (emplacement_id) {
+                countQuery += ` AND pr.id_restaurant_fast_food_emplacement = $${countParamIndex}`;
+                countParams.push(parseInt(emplacement_id));
+                countParamIndex++;
+            }
+
+            if (recherche) {
+                countQuery += ` AND (pr.nom_promo ILIKE $${countParamIndex} OR pr.code_promo ILIKE $${countParamIndex})`;
+                countParams.push(`%${recherche}%`);
+                countParamIndex++;
+            }
+
+            if (statut_temporel) {
+                const maintenant = new Date().toISOString();
+                switch (statut_temporel) {
+                    case 'en_cours':
+                        countQuery += ` AND pr.date_debut_promo <= $${countParamIndex}::timestamp AND pr.date_fin_promo >= $${countParamIndex}::timestamp`;
+                        countParams.push(maintenant);
+                        countParamIndex++;
+                        break;
+                    case 'a_venir':
+                        countQuery += ` AND pr.date_debut_promo > $${countParamIndex}::timestamp`;
+                        countParams.push(maintenant);
+                        countParamIndex++;
+                        break;
+                    case 'expiree':
+                        countQuery += ` AND pr.date_fin_promo < $${countParamIndex}::timestamp`;
+                        countParams.push(maintenant);
+                        countParamIndex++;
+                        break;
+                }
+            }
+
+            const countResult = await db.query(countQuery, countParams);
+
+            res.json({
+                success: true,
+                data: promos,
+                pagination: {
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    total: parseInt(countResult.rows[0].total),
+                    pages: Math.ceil(parseInt(countResult.rows[0].total) / limit)
+                },
+                filters: {
+                    appliques: {
+                        actif: actif || null,
+                        type_promo: type_promo || null,
+                        restaurant_id: restaurant_id || null,
+                        emplacement_id: emplacement_id || null,
+                        recherche: recherche || null,
+                        statut_temporel: statut_temporel || null
+                    },
+                    disponibles: {
+                        types_promo: ENUM_TYPES_PROMO
+                    }
+                }
+            });
+
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    /**
+     * Récupérer les promotions groupées par restaurant
+     * GET /api/v1/restauration/promos/by-restaurant
+     */
+    static async getPromosByRestaurant(req, res, next) {
+        try {
+            const {
+                actif = 'true',
+                type_promo,
+                limit_par_restaurant = 5
+            } = req.query;
+
+            const maintenant = new Date().toISOString();
+
+            const query = `
+                SELECT 
+                    rf.id as restaurant_id,
+                    rf.nom_restaurant_fast_food,
+                    rf.logo_restaurant,
+                    rf.description_restaurant_fast_food,
+                    (
+                        SELECT COUNT(*) 
+                        FROM PROMOSRESTAURANTFASTFOOD pr2
+                        LEFT JOIN EMPLACEMENTSRESTAURANTFASTFOOD erf2 ON erf2.id = pr2.id_restaurant_fast_food_emplacement
+                        WHERE erf2.id_restaurant_fast_food = rf.id
+                        AND pr2.actif = CASE WHEN $1 = 'true' THEN true ELSE pr2.actif END
+                        AND ($2 IS NULL OR pr2.type_promo = $2)
+                    ) as total_promos,
+                    (
+                        SELECT json_agg(
+                            json_build_object(
+                                'id', pr.id,
+                                'nom', pr.nom_promo,
+                                'description', pr.description_promo,
+                                'code', pr.code_promo,
+                                'type', pr.type_promo,
+                                'reduction_pourcentage', pr.pourcentage_reduction,
+                                'reduction_fixe', pr.montant_fixe_reduction,
+                                'date_debut', pr.date_debut_promo,
+                                'date_fin', pr.date_fin_promo,
+                                'est_en_cours', (pr.date_debut_promo <= $3::timestamp AND pr.date_fin_promo >= $3::timestamp),
+                                'jours_restants', EXTRACT(DAY FROM (pr.date_fin_promo - $3::timestamp)),
+                                'emplacement_id', erf.id,
+                                'emplacement_nom', erf.nom_emplacement
+                            ) ORDER BY pr.date_debut_promo DESC
+                        )
+                        FROM (
+                            SELECT DISTINCT pr.*
+                            FROM PROMOSRESTAURANTFASTFOOD pr
+                            JOIN EMPLACEMENTSRESTAURANTFASTFOOD erf ON erf.id = pr.id_restaurant_fast_food_emplacement
+                            WHERE erf.id_restaurant_fast_food = rf.id
+                            AND pr.actif = CASE WHEN $1 = 'true' THEN true ELSE pr.actif END
+                            AND ($2 IS NULL OR pr.type_promo = $2)
+                            ORDER BY pr.date_debut_promo DESC
+                            LIMIT $4
+                        ) pr
+                        LEFT JOIN EMPLACEMENTSRESTAURANTFASTFOOD erf ON erf.id = pr.id_restaurant_fast_food_emplacement
+                    ) as promos
+                FROM RESTAURANTSFASTFOOD rf
+                WHERE rf.est_actif = true AND rf.est_supprime = false
+                ORDER BY rf.nom_restaurant_fast_food
+            `;
+
+            const result = await db.query(query, [
+                actif,
+                type_promo || null,
+                maintenant,
+                parseInt(limit_par_restaurant)
+            ]);
+
+            // Filtrer les restaurants qui ont des promotions
+            const restaurantsAvecPromos = result.rows
+                .filter(r => r.promos && r.promos.length > 0)
+                .map(r => ({
+                    ...r,
+                    promos: r.promos.map(p => ({
+                        ...p,
+                        reduction_pourcentage: p.reduction_pourcentage ? parseFloat(p.reduction_pourcentage) : null,
+                        reduction_fixe: p.reduction_fixe ? parseFloat(p.reduction_fixe) : null
+                    }))
+                }));
+
+            res.json({
+                success: true,
+                data: restaurantsAvecPromos,
+                total_restaurants: restaurantsAvecPromos.length,
+                total_promos: restaurantsAvecPromos.reduce((acc, r) => acc + r.promos.length, 0)
+            });
+
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    /**
+     * Récupérer les promotions par type
+     * GET /api/v1/restauration/promos/by-type
+     */
+    static async getPromosByType(req, res, next) {
+        try {
+            const { actif = 'true' } = req.query;
+
+            const maintenant = new Date().toISOString();
+
+            const query = `
+                SELECT 
+                    pr.type_promo,
+                    COUNT(*) as total,
+                    json_agg(
+                        json_build_object(
+                            'id', pr.id,
+                            'nom', pr.nom_promo,
+                            'code', pr.code_promo,
+                            'reduction_pourcentage', pr.pourcentage_reduction,
+                            'reduction_fixe', pr.montant_fixe_reduction,
+                            'date_fin', pr.date_fin_promo,
+                            'restaurant_id', rf.id,
+                            'restaurant_nom', rf.nom_restaurant_fast_food,
+                            'emplacement_nom', erf.nom_emplacement,
+                            'est_en_cours', (pr.date_debut_promo <= $2::timestamp AND pr.date_fin_promo >= $2::timestamp)
+                        ) ORDER BY pr.date_fin_promo ASC
+                    ) as promos
+                FROM PROMOSRESTAURANTFASTFOOD pr
+                JOIN EMPLACEMENTSRESTAURANTFASTFOOD erf ON erf.id = pr.id_restaurant_fast_food_emplacement
+                JOIN RESTAURANTSFASTFOOD rf ON rf.id = erf.id_restaurant_fast_food
+                WHERE pr.actif = CASE WHEN $1 = 'true' THEN true ELSE pr.actif END
+                GROUP BY pr.type_promo
+                ORDER BY pr.type_promo
+            `;
+
+            const result = await db.query(query, [actif, maintenant]);
+
+            const types = result.rows.map(row => ({
+                type: row.type_promo,
+                total: parseInt(row.total),
+                promos: row.promos.map(p => ({
+                    ...p,
+                    reduction_pourcentage: p.reduction_pourcentage ? parseFloat(p.reduction_pourcentage) : null,
+                    reduction_fixe: p.reduction_fixe ? parseFloat(p.reduction_fixe) : null
+                }))
+            }));
+
+            res.json({
+                success: true,
+                data: types,
+                total_types: types.length
+            });
+
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    /**
+     * Récupérer les promotions expirant bientôt
+     * GET /api/v1/restauration/promos/expirant-bientot
+     */
+    static async getExpiringSoon(req, res, next) {
+        try {
+            const { jours = 7, limit = 10 } = req.query;
+
+            const maintenant = new Date();
+            const dateLimite = new Date();
+            dateLimite.setDate(dateLimite.getDate() + parseInt(jours));
+
+            const query = `
+                SELECT 
+                    pr.id, 
+                    pr.nom_promo,
+                    pr.code_promo,
+                    pr.type_promo,
+                    pr.pourcentage_reduction,
+                    pr.montant_fixe_reduction,
+                    pr.date_fin_promo,
+                    pr.utilisation_count,
+                    pr.utilisation_max,
+                    rf.id as restaurant_id,
+                    rf.nom_restaurant_fast_food,
+                    erf.nom_emplacement,
+                    EXTRACT(DAY FROM (pr.date_fin_promo - NOW())) as jours_restants
+                FROM PROMOSRESTAURANTFASTFOOD pr
+                JOIN EMPLACEMENTSRESTAURANTFASTFOOD erf ON erf.id = pr.id_restaurant_fast_food_emplacement
+                JOIN RESTAURANTSFASTFOOD rf ON rf.id = erf.id_restaurant_fast_food
+                WHERE pr.actif = true
+                AND pr.date_fin_promo BETWEEN NOW() AND $1::timestamp
+                AND (pr.utilisation_max = -1 OR pr.utilisation_count < pr.utilisation_max)
+                ORDER BY pr.date_fin_promo ASC
+                LIMIT $2
+            `;
+
+            const result = await db.query(query, [dateLimite.toISOString(), parseInt(limit)]);
+
+            const promos = result.rows.map(promo => ({
+                ...promo,
+                pourcentage_reduction: promo.pourcentage_reduction ? parseFloat(promo.pourcentage_reduction) : null,
+                montant_fixe_reduction: promo.montant_fixe_reduction ? parseFloat(promo.montant_fixe_reduction) : null,
+                jours_restants: parseInt(promo.jours_restants),
+                utilisations_restantes: promo.utilisation_max === -1 ? 'Illimité' : promo.utilisation_max - promo.utilisation_count
+            }));
+
+            res.json({
+                success: true,
+                data: promos,
+                count: promos.length
+            });
+
+        } catch (error) {
+            next(error);
+        }
+    }
+
+
     /**
      * Récupérer toutes les promotions
      * GET /api/v1/restauration/promos

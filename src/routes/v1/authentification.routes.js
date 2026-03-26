@@ -157,8 +157,9 @@ const verifyCodeLimiter = rateLimit({
  */
 router.post('/register',
     registerLimiter,
+    
     validationMiddleware.validate([
-        body('email').isEmail().normalizeEmail(),
+        body('email').optional().isEmail().normalizeEmail(),
         body('mot_de_passe')
             .isLength({ min: 8 })
             .withMessage('Le mot de passe doit contenir au moins 8 caractères')
@@ -173,12 +174,9 @@ router.post('/register',
             .withMessage('Le nom d\'utilisateur ne peut contenir que des lettres, chiffres et underscores'),
         body('numero_de_telephone')
             .notEmpty()
-            .matches(/^[0-9+\-\s]+$/)
-            .withMessage('Format de téléphone invalide'),
-        body('photo_profil').optional().isURL(),
-        body('date_naissance').optional().isISO8601(),
-        body('sexe').optional().isIn(['M', 'F', 'AUTRE']),
-        body('langue_preferee').optional().isIn(['fr', 'en'])
+            .withMessage('Le numéro de téléphone est requis')
+            .matches(/^\+\d{10,15}$/)
+            .withMessage('Format invalide. Utilisez le format international: +226XXXXXXXX')
     ]),
     AuthController.register.bind(AuthController)
 );
@@ -235,7 +233,7 @@ router.post('/register',
 router.post('/verify',
     verifyCodeLimiter,
     validationMiddleware.validate([
-        body('email').isEmail().normalizeEmail(),
+        body('email').optional().isEmail().normalizeEmail(),
         body('code')
             .notEmpty()
             .isLength({ min: 6, max: 6 })
@@ -346,6 +344,9 @@ router.post('/login',
     ]),
     AuthController.login.bind(AuthController)
 );
+
+router.post('/login-phone', loginLimiter, AuthController.loginPhone.bind(AuthController));
+
 
 /**
  * @swagger

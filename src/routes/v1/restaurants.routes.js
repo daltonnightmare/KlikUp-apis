@@ -37,7 +37,7 @@ router.use(authMiddleware.authenticate);
  * Réponse: { success, data: [restaurants], pagination }
  */
 router.get('/restaurants',
-    roleMiddleware.isAdmin(),
+    /*roleMiddleware.isAdmin(),*/
     validationMiddleware.validate([
         query('page').optional().isInt({ min: 1 }),
         query('limit').optional().isInt({ min: 1, max: 100 }),
@@ -461,6 +461,9 @@ router.get('/emplacements/:emplacementId/menus/par-categorie',
     MenuController.getByCategory.bind(MenuController)
 );
 
+router.get('/menus/all',cacheMiddleware.cache(120), MenuController.getAllMenus.bind(MenuController));
+router.get('/menus/by-restaurant',cacheMiddleware.cache(120), MenuController.getMenusByRestaurant.bind(MenuController));
+
 /**
  * GET /api/v1/restauration/menus/:id
  * Récupérer un menu par ID avec promos actives
@@ -679,6 +682,12 @@ router.get('/emplacements/:emplacementId/produits',
     ]),
     ProduitRestaurantController.getAll.bind(ProduitRestaurantController)
 );
+
+router.get('/produits/all', ProduitRestaurantController.getAllProduits.bind(ProduitRestaurantController));
+router.get('/produits/by-restaurant', ProduitRestaurantController.getProduitsByRestaurant.bind(ProduitRestaurantController));
+router.get('/produits/by-category', ProduitRestaurantController.getProduitsByCategory.bind(ProduitRestaurantController));
+router.get('/produits/global-stats', ProduitRestaurantController.getGlobalStats.bind(ProduitRestaurantController));
+router.get('/produits/en-promo', ProduitRestaurantController.getProduitsEnPromo.bind(ProduitRestaurantController));
 
 /**
  * GET /api/v1/restauration/emplacements/:emplacementId/produits/par-categorie
@@ -1100,6 +1109,12 @@ router.get('/promos',
     ]),
     PromoController.getAll.bind(PromoController)
 );
+
+// Routes pour toutes les promotions
+router.get('/promos/all', cacheMiddleware.cache(300), PromoController.getAllPromos.bind(PromoController));
+router.get('/promos/by-restaurant', cacheMiddleware.cache(300),PromoController.getPromosByRestaurant.bind(PromoController));
+router.get('/promos/by-type', cacheMiddleware.cache(300),PromoController.getPromosByType.bind(PromoController));
+router.get('/promos/expirant-bientot', cacheMiddleware.cache(300),PromoController.getExpiringSoon.bind(PromoController));
 
 /**
  * GET /api/v1/restauration/promos/actives

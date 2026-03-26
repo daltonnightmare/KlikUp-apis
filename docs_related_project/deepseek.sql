@@ -33,7 +33,8 @@ CREATE TYPE compte_role AS ENUM(
     'STAFF_RESTAURANT_FAST_FOOD',
     'BLOGUEUR_RESTAURANT_FAST_FOOD',
     'UTILISATEUR_PRIVE_SIMPLE',
-    'UTILISATEUR_VENDEUR'
+    'UTILISATEUR_VENDEUR',
+    'MULTI_FONCTION'
 );
 
 CREATE TYPE statut_compte AS ENUM(
@@ -259,13 +260,11 @@ CREATE TRIGGER trg_emplacements_transport_maj
 --ERREUR au niveau de comptes
 CREATE TABLE COMPTES (
     id                                  SERIAL PRIMARY KEY,
-    email                               VARCHAR(255) UNIQUE NOT NULL,
+    email                               VARCHAR(255) UNIQUE,
     mot_de_passe_compte                 VARCHAR(255) NOT NULL,
     nom_utilisateur_compte              VARCHAR(100) UNIQUE NOT NULL,
-    numero_de_telephone                 VARCHAR(20) UNIQUE NOT NULL,
-    cni_photo                           VARCHAR(500),
+    numero_de_telephone                 VARCHAR(20) UNIQUE,
     photo_profil_compte                 VARCHAR(500),
-    localisation_livraison              geometry(Point, 4326),  -- Changé de POINT
     statut                              statut_compte DEFAULT 'NON_AUTHENTIFIE',
     code_authentification               VARCHAR(6),
     code_authentification_expiration    TIMESTAMP,
@@ -312,6 +311,124 @@ CREATE TRIGGER trg_comptes_maj
     BEFORE UPDATE ON COMPTES
     FOR EACH ROW EXECUTE FUNCTION fn_update_date_mise_a_jour();
 
+CREATE TABLE COMPTES_RESTAURANTS (
+    compte_id       INTEGER REFERENCES COMPTES(id) ON DELETE CASCADE,
+    restaurant_id   INTEGER REFERENCES RESTAURANTSFASTFOOD(id) ON DELETE CASCADE,
+    role_dans_resto compte_role,  -- 'ADMINISTRATEUR_RESTAURANT', 'STAFF_RESTAURANT', etc.
+    est_defaut      BOOLEAN DEFAULT FALSE,
+    date_affectation TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (compte_id, restaurant_id)
+);
+
+CREATE TABLE COMPTES_BOUTIQUES (
+    compte_id       INTEGER REFERENCES COMPTES(id) ON DELETE CASCADE,
+    boutique_id     INTEGER REFERENCES BOUTIQUES(id) ON DELETE CASCADE,
+    role_dans_boutique compte_role,  -- 'ADMINISTRATEUR_BOUTIQUE', 'VENDEUR', etc.
+    est_defaut      BOOLEAN DEFAULT FALSE,
+    date_affectation TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (compte_id, boutique_id)
+);
+
+-- Un seul restaurant par défaut par utilisateur
+CREATE UNIQUE INDEX idx_un_restaurant_defaut_par_compte
+ON COMPTES_RESTAURANTS (compte_id)
+WHERE est_defaut = true;
+
+-- Un seule boutique par défaut par utilisateur
+CREATE UNIQUE INDEX idx_un_boutique_defaut_par_compte
+ON COMPTES_BOUTIQUES (compte_id)
+WHERE est_defaut = true;
+
+-- Trigger pour restaurants
+CREATE OR REPLACE FUNCTION fn_gerer_defaut_restaurant()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Si on insère/met à jour avec est_defaut = true
+    IF NEW.est_defaut = true THEN
+        -- Enlever le défaut des autres restaurants du même compte
+        UPDATE COMPTES_RESTAURANTS
+        SET est_defaut = false
+        WHERE compte_id = NEW.compte_id
+          AND restaurant_id != NEW.restaurant_id
+          AND est_defaut = true;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_restaurant_defaut
+    BEFORE INSERT OR UPDATE ON COMPTES_RESTAURANTS
+    FOR EACH ROW EXECUTE FUNCTION fn_gerer_defaut_restaurant();
+
+-- Même chose pour boutiques
+CREATE OR REPLACE FUNCTION fn_gerer_defaut_boutique()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.est_defaut = true THEN
+        UPDATE COMPTES_BOUTIQUES
+        SET est_defaut = false
+        WHERE compte_id = NEW.compte_id
+          AND boutique_id != NEW.boutique_id
+          AND est_defaut = true;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_boutique_defaut
+    BEFORE INSERT OR UPDATE ON COMPTES_BOUTIQUES
+    FOR EACH ROW EXECUTE FUNCTION fn_gerer_defaut_boutique();
+
+
+-- Index pour recherches fréquentes
+CREATE INDEX idx_comptes_restaurants_compte ON COMPTES_RESTAURANTS(compte_id);
+CREATE INDEX idx_comptes_restaurants_resto ON COMPTES_RESTAURANTS(restaurant_id);
+CREATE INDEX idx_comptes_restaurants_role ON COMPTES_RESTAURANTS(role_dans_resto);
+
+CREATE INDEX idx_comptes_boutiques_compte ON COMPTES_BOUTIQUES(compte_id);
+CREATE INDEX idx_comptes_boutiques_boutique ON COMPTES_BOUTIQUES(boutique_id);
+CREATE INDEX idx_comptes_boutiques_role ON COMPTES_BOUTIQUES(role_dans_boutique);
+
+
+-- Migrer les restaurants existants
+INSERT INTO COMPTES_RESTAURANTS (compte_id, restaurant_id, role_dans_resto, est_defaut)
+SELECT id, restaurant_id, compte_role, true
+FROM COMPTES 
+WHERE restaurant_id IS NOT NULL;
+
+-- Migrer les boutiques existantes
+INSERT INTO COMPTES_BOUTIQUES (compte_id, boutique_id, role_dans_boutique, est_defaut)
+SELECT id, boutique_id, compte_role, true
+FROM COMPTES 
+WHERE boutique_id IS NOT NULL;
+
+-- Optionnel : Supprimer les anciennes colonnes
+ALTER TABLE COMPTES DROP COLUMN restaurant_id;
+ALTER TABLE COMPTES DROP COLUMN boutique_id;
+
+CREATE TABLE COMPTES_COMPAGNIES (
+	id SERIAL PRIMARY KEY,
+    compte_id       INTEGER REFERENCES COMPTES(id) ON DELETE CASCADE,
+    compagnie_id    INTEGER REFERENCES COMPAGNIESTRANSPORT(id) ON DELETE CASCADE,
+	emplacement_compagnie_id INTEGER REFERENCES EMPLACEMENTSTRANSPORT(id) ON DELETE SET NULL,
+    role_dans_compagnie compte_role,
+    est_defaut      BOOLEAN DEFAULT FALSE,
+    date_affectation TIMESTAMP DEFAULT NOW(),
+    matricule       VARCHAR(50),        -- Optionnel
+    service         VARCHAR(100),       -- Optionnel
+
+	UNIQUE(compte_id, compagnie_id)
+);
+
+-- Index pour défaut
+CREATE UNIQUE INDEX idx_un_compagnie_defaut_par_compte
+ON COMPTES_COMPAGNIES (compte_id)
+WHERE est_defaut = true;
+
+-- Index pour recherches
+CREATE INDEX idx_comptes_compagnies_compagnie ON COMPTES_COMPAGNIES(compagnie_id);
+CREATE INDEX idx_comptes_compagnies_emplacement ON COMPTES_COMPAGNIES(emplacement_compagnie_id) 
+    WHERE emplacement_compagnie_id IS NOT NULL;
 -- =============================================================================
 -- SECTION 6 : TICKETS TRANSPORT
 -- =============================================================================
@@ -2527,3 +2644,53 @@ CREATE INDEX idx_notifications_non_lues_recentes
 CREATE INDEX idx_articles_publies_recents
     ON ARTICLES_BLOG_PLATEFORME(categorie_principale, date_publication DESC)
     WHERE statut = 'PUBLIE' AND est_archive = FALSE;
+
+
+
+-- Recréation de la table LIVREURS avec liaison à COMPTES
+DROP TABLE IF EXISTS LIVREURS CASCADE;
+
+CREATE TABLE LIVREURS (
+    id                       SERIAL PRIMARY KEY,
+    -- Liaison 1:1 avec COMPTES (obligatoire et unique)
+    compte_id                INTEGER UNIQUE NOT NULL
+                             REFERENCES COMPTES(id) ON DELETE CASCADE,
+    
+    -- Informations professionnelles uniquement
+    id_entreprise_livraison  INTEGER REFERENCES ENTREPRISE_LIVRAISON(id) ON DELETE SET NULL,
+    est_disponible           BOOLEAN DEFAULT TRUE,
+    localisation_actuelle    geometry(Point, 4326),
+    note_moyenne             DECIMAL(3,2) CHECK (note_moyenne BETWEEN 0 AND 5),
+    nombre_livraisons        INTEGER DEFAULT 0,
+    est_actif                BOOLEAN DEFAULT TRUE,
+    
+    -- Nouvelles colonnes utiles pour les livreurs
+    type_vehicule            VARCHAR(30) CHECK (type_vehicule IN ('MOTO', 'VELO', 'VOITURE', 'SCOOTER', 'PIED')),
+    plaque_immatriculation   VARCHAR(20),
+    zone_travail_principale  geometry(Polygon, 4326),  -- Zone de prédilection (pour algo d'affectation)
+    rayon_action_km          INTEGER DEFAULT 10 CHECK (rayon_action_km > 0),
+    preference_horaire       JSONB DEFAULT '{"nuit": false, "weekend": true, "longue_distance": false}',
+    
+    -- Validation du statut
+    date_creation            TIMESTAMP DEFAULT NOW(),
+    date_mise_a_jour         TIMESTAMP DEFAULT NOW(),
+
+    -- Contrainte : si actif, doit avoir une entreprise (sauf indépendants)
+    CONSTRAINT check_livreur_coherent CHECK (
+        (est_actif = FALSE) OR 
+        (id_entreprise_livraison IS NOT NULL) OR 
+        (type_vehicule = 'PIED')  -- Les livreurs à pied peuvent être indépendants
+    )
+);
+
+-- Index optimisés
+CREATE INDEX idx_livreurs_compte ON LIVREURS(compte_id);
+CREATE INDEX idx_livreurs_entreprise ON LIVREURS(id_entreprise_livraison) WHERE est_actif = TRUE;
+CREATE INDEX idx_livreurs_disponible ON LIVREURS(est_disponible) WHERE est_disponible = TRUE;
+CREATE INDEX idx_livreurs_localisation ON LIVREURS USING GIST(localisation_actuelle) WHERE est_disponible = TRUE;
+CREATE INDEX idx_livreurs_zone ON LIVREURS USING GIST(zone_travail_principale);
+
+-- Trigger pour mise à jour automatique
+CREATE TRIGGER trg_livreurs_maj
+    BEFORE UPDATE ON LIVREURS
+    FOR EACH ROW EXECUTE FUNCTION fn_update_date_mise_a_jour();

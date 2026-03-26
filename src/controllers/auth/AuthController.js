@@ -26,6 +26,7 @@ class AuthController {
      * Inscription d'un nouvel utilisateur
      * POST /api/v1/auth/register
      */
+    /*
     static async register(req, res, next) {
         const client = await db.getClient();
         try {
@@ -105,12 +106,160 @@ class AuthController {
         } finally {
             client.release();
         }
-    }
+    }*/
+    static async register(req, res, next) {
+        const client = await db.getClient();
+        try {
+            await client.query('BEGIN');
+            
+            const errors = validationResult(req);
+            if (!errors.isEmpty()) {
+                return res.status(400).json({ errors: errors.array() });
+            }
 
+            const { email, mot_de_passe, nom_utilisateur, numero_de_telephone, ...autresDonnees } = req.body;
+
+            // Validation de base
+            if (!mot_de_passe || !nom_utilisateur || !numero_de_telephone) {
+                throw new ValidationError('Mot de passe, nom d\'utilisateur et numéro de téléphone sont requis');
+            }
+
+            // Construction dynamique des conditions de vérification
+            const checkConditions = ['nom_utilisateur_compte = $1', 'numero_de_telephone = $2'];
+            const checkValues = [nom_utilisateur, numero_de_telephone];
+            
+            // Ajouter email uniquement s'il est fourni
+            if (email && email.trim() !== '') {
+                checkConditions.push('email = $3');
+                checkValues.push(email);
+            }
+
+            const existingUser = await client.query(
+                `SELECT id FROM COMPTES WHERE ${checkConditions.join(' OR ')}`,
+                checkValues
+            );
+
+            if (existingUser.rows.length > 0) {
+                throw new AppError('Un compte avec ces informations existe déjà', 409);
+            }
+
+            // Hacher le mot de passe
+            const saltRounds = 10;
+            const motDePasseHash = await bcrypt.hash(mot_de_passe, saltRounds);
+
+            // Générer code d'authentification unique
+            const codeAuth = await this._generateUniqueCode(client);
+            const codeExpiration = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+
+            // Construction dynamique des champs d'insertion
+            const fields = [
+                'mot_de_passe_compte', 
+                'nom_utilisateur_compte', 
+                'numero_de_telephone', 
+                'code_authentification', 
+                'code_authentification_expiration', 
+                'compte_role', 
+                'statut',
+                'date_creation', 
+                'date_mise_a_jour'
+            ];
+            const maintenant = new Date();
+            const insertValues = [
+                motDePasseHash, 
+                nom_utilisateur, 
+                numero_de_telephone, 
+                codeAuth, 
+                codeExpiration, 
+                'UTILISATEUR_PRIVE_SIMPLE', 
+                'NON_AUTHENTIFIE',
+                maintenant,
+                maintenant
+            ];
+
+            // Ajouter l'email UNIQUEMENT s'il est fourni et non vide
+            const hasEmail = email && email.trim() !== '';
+
+            if (hasEmail) {
+                fields.unshift('email');
+                insertValues.unshift(email.trim());
+            }
+
+            // Ajouter la photo de profil si fournie
+            if (autresDonnees.photo_profil) {
+                fields.push('photo_profil_compte');
+                insertValues.push(autresDonnees.photo_profil);
+            }
+
+            // Construire la requête dynamique
+            const placeholders = fields.map((_, i) => `$${i + 1}`).join(', ');
+            const query = `INSERT INTO COMPTES (${fields.join(', ')}) 
+                        VALUES (${placeholders})
+                        RETURNING id, nom_utilisateur_compte, compte_role, statut${hasEmail ? ', email': ''}`;
+
+            const result = await client.query(query, insertValues);
+            const newUser = result.rows[0];
+
+            // Envoyer code de vérification par SMS (obligatoire)
+            await SmsService.sendVerificationCode(numero_de_telephone, codeAuth);
+
+            // Envoyer email de bienvenue uniquement si email fourni
+            if (hasEmail) {
+                try {
+                    await EmailService.sendWelcomeEmail(email, nom_utilisateur);
+                } catch (emailError) {
+                    // Ne pas bloquer l'inscription si l'email échoue
+                    console.error('Erreur envoi email de bienvenue:', emailError);
+                }
+            }
+
+            // Journaliser l'action
+            await AuditService.log({
+                action: 'REGISTER',
+                ressource_type: 'COMPTES',
+                ressource_id: newUser.id,
+                donnees_apres: {
+                    id: newUser.id,
+                    nom_utilisateur: newUser.nom_utilisateur_compte,
+                    email: email || null,
+                    telephone: numero_de_telephone
+                },
+                adresse_ip: req.ip,
+                user_agent: req.get('User-Agent')
+            });
+
+            await client.query('COMMIT');
+
+            res.status(201).json({
+                success: true,
+                message: email && email.trim() !== '' 
+                    ? 'Inscription réussie. Un code de vérification vous a été envoyé par SMS.'
+                    : 'Inscription réussie avec votre numéro de téléphone. Un code de vérification vous a été envoyé par SMS.',
+                data: {
+                    utilisateur: {
+                        id: newUser.id,
+                        nom_utilisateur: newUser.nom_utilisateur_compte,
+                        email: email || null,
+                        compte_role: newUser.compte_role,
+                        statut: newUser.statut
+                    },
+                    requires_verification: true,
+                    verification_method: 'SMS'
+                }
+            });
+
+        } catch (error) {
+            await client.query('ROLLBACK');
+            next(error);
+        } finally {
+            client.release();
+        }
+    }
+    
     /**
      * Connexion utilisateur
      * POST /api/v1/auth/login
      */
+    
     static async login(req, res, next) {
         const client = await db.getClient();
         try {
@@ -120,10 +269,12 @@ class AuthController {
             const result = await client.query(
                 `SELECT id, email, mot_de_passe_compte, nom_utilisateur_compte, 
                         compte_role, statut, tentatives_echec_connexion, 
-                        date_verouillage, numero_de_telephone
+                        date_verouillage, numero_de_telephone, photo_profil_compte, date_creation, date_mise_a_jour
                  FROM COMPTES 
-                 WHERE email = $1 AND est_supprime = false`,
-                [email]
+                 WHERE email = $1 
+                    AND est_supprime = false 
+                    AND statut = $2`,
+                [email, "EST_AUTHENTIFIE"]
             );
 
             if (result.rows.length === 0) {
@@ -172,23 +323,7 @@ class AuthController {
                 [user.id]
             );
 
-            // Générer tokens
-            const accessToken = TokenService.generateAccessToken({
-                id: user.id,
-                email: user.email,
-                role: user.compte_role,
-                nom: user.nom_utilisateur_compte
-            });
-
-            const refreshToken = TokenService.generateRefreshToken({
-                id: user.id,
-                type: 'refresh',
-                sessionId: crypto.randomUUID()
-            });
-
-            // Hasher le refresh token pour stockage
-            const refreshTokenHash = TokenService.hashToken(refreshToken);
-
+           
             // Créer la session
             const sessionResult = await client.query(
                 `INSERT INTO SESSIONS 
@@ -196,11 +331,199 @@ class AuthController {
                  VALUES ($1, $2, $3, $4, $5, $6)
                  RETURNING session_uuid, date_expiration`,
                 [user.id, 
-                 TokenService.hashToken(accessToken), 
-                 refreshTokenHash,
+                 "temp_access_hash", 
+                 "temp_refresh_hash",
                  req.ip, 
                  req.get('User-Agent'),
                  req.headers['x-platform'] || 'WEB']
+            );
+
+            const sessionUuid = sessionResult.rows[0].session_uuid;
+             // Générer tokens
+            const accessToken = TokenService.generateAccessToken({
+                id: user.id,
+                email: user.email,
+                role: user.compte_role,
+                nom: user.nom_utilisateur_compte,
+                session_id: sessionUuid
+            });
+
+            const refreshToken = TokenService.generateRefreshToken({
+                id: user.id,
+                type: 'refresh',
+                session_id: sessionUuid
+            });
+            //Hasher l'access token
+            const accessTokenHash = TokenService.hashToken(accessToken);
+            // Hasher le refresh token pour stockage
+            const refreshTokenHash = TokenService.hashToken(refreshToken);
+
+            // mettre à jour la session
+
+            await client.query(
+                `UPDATE SESSIONS
+                    SET token_hash = $1, refresh_token_hash = $2
+                    WHERE session_uuid = $3
+                `, [accessTokenHash, refreshTokenHash, sessionUuid]
+            );
+
+            // Journaliser la connexion réussie
+            await client.query(
+                `INSERT INTO HISTORIQUE_CONNEXIONS 
+                 (compte_id, type_connexion, adresse_ip, utilisateur_agent, statut_connexion)
+                 VALUES ($1, $2, $3, $4, $5)`,
+                [user.id, 'CONNEXION', req.ip, req.get('User-Agent'), 'SUCCESS']
+            );
+
+            // Journaliser l'action
+            await AuditService.log({
+                action: 'LOGIN',
+                ressource_type: 'COMPTES',
+                ressource_id: user.id,
+                donnees_avant: null,
+                donnees_apres: { statut: 'CONNECTE' },
+                adresse_ip: req.ip,
+                user_agent: req.get('User-Agent'),
+                session_id: sessionResult.rows[0].session_uuid
+            });
+
+            res.json({
+                success: true,
+                message: 'Connexion réussie',
+                data: {
+                    utilisateur: {
+                        id: user.id,
+                        email: user.email,
+                        nom: user.nom_utilisateur_compte,
+                        role: user.compte_role,
+                        telephone: user.numero_de_telephone
+                    },
+                    tokens: {
+                        access_token: accessToken,
+                        refresh_token: refreshToken,
+                        expires_in: sessionResult.rows[0].date_expiration
+                    }
+                }
+            });
+
+        } catch (error) {
+            next(error);
+        } finally {
+            client.release();
+        }
+    }
+    
+    /**
+     * Connexion utilisateur
+     * POST /api/v1/auth/login_phone
+     */
+    
+    static async loginPhone(req, res, next) {
+        const client = await db.getClient();
+        try {
+            const { numero_de_telephone, mot_de_passe } = req.body;
+
+            // Récupérer l'utilisateur avec son mot de passe
+            const result = await client.query(
+                `SELECT id, email, mot_de_passe_compte, numero_de_telephone, nom_utilisateur_compte, 
+                        compte_role, statut, tentatives_echec_connexion, 
+                        date_verouillage, photo_profil_compte, date_creation, date_mise_a_jour
+                 FROM COMPTES 
+                 WHERE numero_de_telephone = $1 
+                    AND est_supprime = false 
+                    AND statut = $2`,
+                [numero_de_telephone, "EST_AUTHENTIFIE"]
+            );
+
+            if (result.rows.length === 0) {
+                throw new AuthenticationError('Numéro de telephone ou mot de passe incorrect');
+            }
+
+            const user = result.rows[0];
+
+            // Vérifier si le compte est verrouillé
+            if (user.statut === 'SUSPENDU' || user.statut === 'BANNI') {
+                throw new AuthenticationError('Votre compte est suspendu. Contactez le support.');
+            }
+
+            if (user.date_verouillage && user.date_verouillage > new Date()) {
+                throw new AuthenticationError('Compte temporairement verrouillé. Réessayez plus tard.');
+            }
+
+            // Vérifier le mot de passe
+            const validPassword = await bcrypt.compare(mot_de_passe, user.mot_de_passe_compte);
+            
+            if (!validPassword) {
+                // Incrémenter les tentatives échouées
+                await client.query(
+                    `UPDATE COMPTES 
+                     SET tentatives_echec_connexion = tentatives_echec_connexion + 1
+                     WHERE id = $1`,
+                    [user.id]
+                );
+
+                // Journaliser la tentative échouée
+                await client.query(
+                    `INSERT INTO HISTORIQUE_CONNEXIONS 
+                     (compte_id, type_connexion, adresse_ip, utilisateur_agent, statut_connexion)
+                     VALUES ($1, $2, $3, $4, $5)`,
+                    [user.id, 'CONNEXION', req.ip, req.get('User-Agent'), 'FAILED']
+                );
+
+                throw new AuthenticationError('Email ou mot de passe incorrect');
+            }
+
+            // Réinitialiser les tentatives échouées
+            await client.query(
+                `UPDATE COMPTES 
+                 SET tentatives_echec_connexion = 0, date_derniere_connexion = NOW()
+                 WHERE id = $1`,
+                [user.id]
+            );
+
+           
+            // Créer la session
+            const sessionResult = await client.query(
+                `INSERT INTO SESSIONS 
+                 (compte_id, token_hash, refresh_token_hash, adresse_ip, user_agent, plateforme)
+                 VALUES ($1, $2, $3, $4, $5, $6)
+                 RETURNING session_uuid, date_expiration`,
+                [user.id, 
+                 "temp_access_hash", 
+                 "temp_refresh_hash",
+                 req.ip, 
+                 req.get('User-Agent'),
+                 req.headers['x-platform'] || 'WEB']
+            );
+
+            const sessionUuid = sessionResult.rows[0].session_uuid;
+             // Générer tokens
+            const accessToken = TokenService.generateAccessToken({
+                id: user.id,
+                email: user.email ?? null,
+                telephone: user.numero_de_telephone,
+                role: user.compte_role,
+                nom: user.nom_utilisateur_compte,
+                session_id: sessionUuid
+            });
+
+            const refreshToken = TokenService.generateRefreshToken({
+                id: user.id,
+                type: 'refresh',
+                session_id: sessionUuid
+            });
+            //Hasher l'access token
+            const accessTokenHash = TokenService.hashToken(accessToken);
+            // Hasher le refresh token pour stockage
+            const refreshTokenHash = TokenService.hashToken(refreshToken);
+
+            // mettre à jour la session
+
+            await client.query(
+                `UPDATE SESSIONS
+                    SET token_hash = $1, refresh_token_hash = $2
+                    WHERE session_uuid = $3
+                `, [accessTokenHash, refreshTokenHash, sessionUuid]
             );
 
             // Journaliser la connexion réussie
@@ -370,6 +693,7 @@ class AuthController {
      * Vérification du code 2FA
      * POST /api/v1/auth/verify
      */
+    /*
     static async verifyCode(req, res, next) {
         const client = await db.getClient();
         try {
@@ -416,8 +740,113 @@ class AuthController {
         } finally {
             client.release();
         }
-    }
+    }*/
 
+    static async verifyCode(req, res, next) {
+        const client = await db.getClient();
+        try {
+            const { identifiant, code } = req.body;
+
+            // Vérification des champs requis
+            if (!identifiant || !identifiant.trim()) {
+                throw new AppError('Email ou numéro de téléphone requis', 400);
+            }
+
+            if (!code || !code.trim()) {
+                throw new AppError('Code de vérification requis', 400);
+            }
+
+            // Déterminer si l'identifiant est un email ou un téléphone
+            const isEmail = identifiant.includes('@') && identifiant.includes('.');
+            const isPhone = /^[\+]?[0-9\s\-\(\)]{8,20}$/.test(identifiant);
+            
+            let whereCondition = '';
+            const queryParams = [];
+            
+            if (isEmail) {
+                whereCondition = 'email = $1';
+                queryParams.push(identifiant.trim());
+            } else if (isPhone) {
+                whereCondition = 'numero_de_telephone = $1';
+                queryParams.push(identifiant.trim());
+            } else {
+                throw new AppError('Format d\'identifiant invalide. Utilisez un email ou un numéro de téléphone valide.', 400);
+            }
+
+            // Ajouter la condition d'utilisateur non supprimé
+            const query = `
+                SELECT id, code_authentification, code_authentification_expiration, statut, 
+                    email, nom_utilisateur_compte, numero_de_telephone
+                FROM COMPTES 
+                WHERE ${whereCondition} AND est_supprime = false
+            `;
+
+            const result = await client.query(query, queryParams);
+
+            if (result.rows.length === 0) {
+                throw new AppError('Utilisateur non trouvé', 404);
+            }
+
+            const user = result.rows[0];
+
+            // Vérifier si le compte est déjà vérifié
+            if (user.statut === 'EST_AUTHENTIFIE') {
+                throw new AppError('Compte déjà vérifié', 400);
+            }
+
+            // Vérifier le code
+            if (user.code_authentification !== code) {
+                throw new AppError('Code de vérification invalide', 400);
+            }
+
+            // Vérifier l'expiration du code
+            if (new Date() > new Date(user.code_authentification_expiration)) {
+                throw new AppError('Code de vérification expiré', 400);
+            }
+
+            // Mettre à jour le statut du compte
+            await client.query(
+                `UPDATE COMPTES 
+                SET statut = $1, code_authentification = NULL, 
+                    code_authentification_expiration = NULL, date_mise_a_jour = NOW()
+                WHERE id = $2`,
+                ['EST_AUTHENTIFIE', user.id]
+            );
+
+            // Journaliser la vérification
+            await AuditService.log({
+                action: 'VERIFY_CODE',
+                ressource_type: 'COMPTES',
+                ressource_id: user.id,
+                donnees_apres: {
+                    id: user.id,
+                    statut: 'EST_AUTHENTIFIE',
+                    verification_method: isEmail ? 'EMAIL' : 'SMS'
+                },
+                adresse_ip: req.ip,
+                user_agent: req.get('User-Agent')
+            });
+
+            res.json({
+                success: true,
+                message: 'Compte vérifié avec succès',
+                data: {
+                    utilisateur: {
+                        id: user.id,
+                        nom_utilisateur: user.nom_utilisateur_compte,
+                        email: user.email || null,
+                        telephone: user.numero_de_telephone,
+                        statut: 'EST_AUTHENTIFIE'
+                    }
+                }
+            });
+
+        } catch (error) {
+            next(error);
+        } finally {
+            client.release();
+        }
+    }
     /**
      * Renvoyer le code de vérification
      * POST /api/v1/auth/resend-code
@@ -474,6 +903,29 @@ class AuthController {
         } finally {
             client.release();
         }
+    }
+
+    /**
+     * Générer un code unique
+     */
+    static async _generateUniqueCode(client) {
+        let code;
+        let isUnique = false;
+        let attempts = 0;
+        
+        while (!isUnique && attempts < 10) {
+            code = Math.floor(100000 + Math.random() * 900000).toString();
+            const result = await client.query(
+                `SELECT id FROM COMPTES WHERE code_authentification = $1`,
+                [code]
+            );
+            if (result.rows.length === 0) {
+                isUnique = true;
+            }
+            attempts++;
+        }
+        
+        return code;
     }
 }
 
