@@ -28,8 +28,9 @@ class Database {
                 connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT) || 2000,
                 
                 // Validation des connexions
-                statement_timeout: parseInt(process.env.DB_STATEMENT_TIMEOUT) || 10000,
-                query_timeout: parseInt(process.env.DB_QUERY_TIMEOUT) || 10000
+                statement_timeout: parseInt(process.env.DB_STATEMENT_TIMEOUT) || 30000,
+                query_timeout: parseInt(process.env.DB_QUERY_TIMEOUT) || 30000,
+                idle_in_transaction_session_timeout: parseInt(process.env.DB_IDLE_IN_TRANSACTION_SESSION_TIMEOUT) || 60000
             });
 
             // Écouter les événements du pool

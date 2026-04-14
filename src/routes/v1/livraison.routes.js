@@ -183,6 +183,9 @@ router.patch('/demandes/:id/statut',
     ]),
     DemandeLivraisonController.updateStatut.bind(DemandeLivraisonController)
 );
+// NOUVELLES ROUTES - Pour les utilisateurs normaux
+router.get('/mes-demandes', authMiddleware.authenticate, DemandeLivraisonController.findMyLivraisons);
+router.get('/mes-demandes/:id', authMiddleware.authenticate, DemandeLivraisonController.findMyLivraisonById);
 
 /**
  * POST /api/v1/livraison/demandes/:id/annuler
@@ -334,7 +337,7 @@ router.patch('/entreprises/:id/toggle',
  */
 router.get('/entreprises/:id/stats',
     authMiddleware.authenticate,
-    roleMiddleware.isAdmin(),
+    /*roleMiddleware.isAdmin(),*/
     cacheMiddleware.cache(600), // 10 minutes
     validationMiddleware.validate([
         param('id').isInt(),

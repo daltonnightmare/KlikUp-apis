@@ -113,6 +113,7 @@ class EmplacementController {
      * Récupérer un emplacement par ID
      * GET /api/v1/transport/emplacements/:id
      */
+    /*
     static async getById(req, res, next) {
         try {
             const { id } = req.params;
@@ -149,6 +150,85 @@ class EmplacementController {
                             'prix', s.prix_service,
                             'duree_validite', s.duree_validite_jours
                         ))
+                        FROM SERVICES s
+                        WHERE s.emplacement_id = et.id AND s.actif = true
+                    ) as services_disponibles
+                FROM EMPLACEMENTSTRANSPORT et
+                JOIN COMPAGNIESTRANSPORT ct ON ct.id = et.compagnie_id
+                WHERE et.id = $1`,
+                [id]
+            );
+
+            if (result.rows.length === 0) {
+                throw new AppError('Emplacement non trouvé', 404);
+            }
+
+            const emplacement = result.rows[0];
+            
+            // Formater les géométries
+            if (emplacement.localisation) {
+                emplacement.localisation = JSON.parse(emplacement.localisation);
+            }
+            if (emplacement.localisation_arret) {
+                emplacement.localisation_arret = JSON.parse(emplacement.localisation_arret);
+            }
+
+            res.json({
+                success: true,
+                data: emplacement
+            });
+
+        } catch (error) {
+            next(error);
+        }
+    }*/
+   /**
+     * Récupérer un emplacement par ID
+     * GET /api/v1/transport/emplacements/:id
+     */
+    static async getById(req, res, next) {
+        try {
+            const { id } = req.params;
+
+            // Requête corrigée - suppression du GROUP BY problématique
+            const result = await db.query(
+                `SELECT 
+                    et.id,
+                    et.nom_emplacement,
+                    et.jours_ouverture_emplacement_transport,
+                    et.portefeuille_emplacement,
+                    et.est_actif,
+                    et.date_creation,
+                    et.date_mise_a_jour,
+                    et.compagnie_id,
+                    ST_AsGeoJSON(et.localisation_emplacement) as localisation,
+                    ST_AsGeoJSON(et.localisation_arret_bus) as localisation_arret,
+                    ct.nom_compagnie,
+                    ct.logo_compagnie,
+                    (
+                        SELECT COALESCE(json_agg(json_build_object(
+                            'id', tt.id,
+                            'nom', tt.nom_produit,
+                            'description', tt.description_produit,
+                            'prix', tt.prix_vente_produit,
+                            'quantite_stock', tt.quantite_stock,
+                            'quantite_vendu', tt.quantite_vendu,
+                            'journalier', tt.journalier,
+                            'hebdomadaire', tt.hebdomadaire,
+                            'mensuel', tt.mensuel,
+                            'donnees', tt.donnees_secondaires_produit
+                        )), '[]'::json)
+                        FROM TICKETSTRANSPORT tt
+                        WHERE tt.emplacement_id = et.id AND tt.actif = true
+                    ) as tickets_disponibles,
+                    (
+                        SELECT COALESCE(json_agg(json_build_object(
+                            'id', s.id,
+                            'nom', s.nom_service,
+                            'type', s.type_service,
+                            'prix', s.prix_service,
+                            'duree_validite', s.duree_validite_jours
+                        )), '[]'::json)
                         FROM SERVICES s
                         WHERE s.emplacement_id = et.id AND s.actif = true
                     ) as services_disponibles
@@ -390,7 +470,7 @@ class EmplacementController {
      * Récupérer les emplacements à proximité
      * GET /api/v1/transport/emplacements/proximite
      */
-    static async getNearby(req, res, next) {
+    /*static async getNearby(req, res, next) {
         try {
             const { 
                 lat, 
@@ -473,7 +553,119 @@ class EmplacementController {
         } catch (error) {
             next(error);
         }
+    }*/
+    static async getNearby(req, res, next) {
+    try {
+        const { 
+            lat, 
+            lng, 
+            rayon_km = 5, 
+            limit = 20,
+            avec_tickets = true 
+        } = req.query;
+
+        if (!lat || !lng) {
+            throw new ValidationError('Latitude et longitude requises');
+        }
+
+        // Convertir explicitement les nombres
+        const rayonMetres = parseFloat(rayon_km) * 1000;
+        const limitInt = parseInt(limit, 10);
+        const latFloat = parseFloat(lat);
+        const lngFloat = parseFloat(lng);
+
+        // Requête principale
+        const query = `
+            SELECT 
+                et.id, 
+                et.nom_emplacement,
+                ct.nom_compagnie,
+                ct.logo_compagnie,
+                ST_Distance(
+                    et.localisation_emplacement::geography,
+                    ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography
+                ) as distance,
+                ST_AsGeoJSON(et.localisation_emplacement) as localisation,
+                et.jours_ouverture_emplacement_transport
+            FROM EMPLACEMENTSTRANSPORT et
+            JOIN COMPAGNIESTRANSPORT ct ON ct.id = et.compagnie_id
+            WHERE et.est_actif = true
+              AND ct.est_actif = true
+              AND ST_DWithin(
+                  et.localisation_emplacement::geography,
+                  ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
+                  $3
+              )
+            ORDER BY distance ASC
+            LIMIT $4
+        `;
+
+        const result = await db.query(query, [lngFloat, latFloat, rayonMetres, limitInt]);
+        
+        const emplacements = result.rows.map(emp => ({
+            id: emp.id,
+            nom_emplacement: emp.nom_emplacement,
+            nom_compagnie: emp.nom_compagnie,
+            logo_compagnie: emp.logo_compagnie,
+            distance: Math.round(emp.distance),
+            localisation: emp.localisation ? JSON.parse(emp.localisation) : null,
+            jours_ouverture_emplacement_transport: emp.jours_ouverture_emplacement_transport,
+            tickets_populaires: []
+        }));
+
+        // Récupération séparée des tickets si demandée
+        if (avec_tickets === 'true' && emplacements.length > 0) {
+            const emplacementIds = emplacements.map(e => e.id);
+            const placeholders = emplacementIds.map((_, i) => `$${i + 1}`).join(',');
+            
+            const ticketsQuery = `
+                SELECT 
+                    tt.emplacement_id,
+                    COALESCE(json_agg(json_build_object(
+                        'id', tt.id,
+                        'nom', tt.nom_produit,
+                        'prix', tt.prix_vente_produit,
+                        'type', CASE 
+                            WHEN tt.journalier = true THEN 'journalier'
+                            WHEN tt.hebdomadaire = true THEN 'hebdomadaire'
+                            WHEN tt.mensuel = true THEN 'mensuel'
+                            ELSE 'inconnu'
+                        END
+                    )) FILTER (WHERE tt.id IS NOT NULL), '[]'::json) as tickets
+                FROM TICKETSTRANSPORT tt
+                WHERE tt.emplacement_id = ANY($${emplacementIds.length}::int[])
+                  AND tt.actif = true
+                GROUP BY tt.emplacement_id
+            `;
+            
+            const ticketsResult = await db.query(ticketsQuery, [emplacementIds]);
+            
+            // Associer les tickets aux emplacements
+            const ticketsMap = new Map();
+            ticketsResult.rows.forEach(row => {
+                ticketsMap.set(row.emplacement_id, row.tickets);
+            });
+            
+            emplacements.forEach(emp => {
+                emp.tickets_populaires = ticketsMap.get(emp.id) || [];
+            });
+        }
+
+        res.json({
+            success: true,
+            data: emplacements,
+            meta: {
+                centre: { lat: latFloat, lng: lngFloat },
+                rayon_km: parseFloat(rayon_km),
+                total: emplacements.length
+            }
+        });
+
+    } catch (error) {
+        console.error('Erreur dans getNearby:', error);
+        next(error);
     }
+}
 
     /**
      * Vérifier la disponibilité d'un emplacement

@@ -387,7 +387,7 @@ class AuthController {
                 session_id: sessionResult.rows[0].session_uuid
             });
 
-            res.json({
+            res.status(200).json({
                 success: true,
                 message: 'Connexion réussie',
                 data: {
@@ -546,7 +546,7 @@ class AuthController {
                 session_id: sessionResult.rows[0].session_uuid
             });
 
-            res.json({
+            res.status(200).json({
                 success: true,
                 message: 'Connexion réussie',
                 data: {
@@ -623,7 +623,7 @@ class AuthController {
                 [newAccessTokenHash, session.id]
             );
 
-            res.json({
+            res.status(200).json({
                 success: true,
                 data: {
                     access_token: newAccessToken,
@@ -693,54 +693,7 @@ class AuthController {
      * Vérification du code 2FA
      * POST /api/v1/auth/verify
      */
-    /*
-    static async verifyCode(req, res, next) {
-        const client = await db.getClient();
-        try {
-            const { email, code } = req.body;
-
-            const result = await client.query(
-                `SELECT id, code_authentification, code_authentification_expiration, statut
-                 FROM COMPTES 
-                 WHERE email = $1 AND est_supprime = false`,
-                [email]
-            );
-
-            if (result.rows.length === 0) {
-                throw new AppError('Utilisateur non trouvé', 404);
-            }
-
-            const user = result.rows[0];
-
-            // Vérifier le code
-            if (user.code_authentification !== code) {
-                throw new AppError('Code de vérification invalide', 400);
-            }
-
-            if (new Date() > user.code_authentification_expiration) {
-                throw new AppError('Code de vérification expiré', 400);
-            }
-
-            // Mettre à jour le statut du compte
-            await client.query(
-                `UPDATE COMPTES 
-                 SET statut = $1, code_authentification = NULL, 
-                     code_authentification_expiration = NULL, date_mise_a_jour = NOW()
-                 WHERE id = $2`,
-                ['EST_AUTHENTIFIE', user.id]
-            );
-
-            res.json({
-                success: true,
-                message: 'Compte vérifié avec succès'
-            });
-
-        } catch (error) {
-            next(error);
-        } finally {
-            client.release();
-        }
-    }*/
+    
 
     static async verifyCode(req, res, next) {
         const client = await db.getClient();
@@ -847,31 +800,54 @@ class AuthController {
             client.release();
         }
     }
+
+
     /**
-     * Renvoyer le code de vérification
-     * POST /api/v1/auth/resend-code
+     * Vérification du code 2FA
+     * POST /api/v1/auth/verify-MDP
      */
-    static async resendVerificationCode(req, res, next) {
+    
+
+    static async verifyCodeMDP(req, res, next) {
         const client = await db.getClient();
         try {
-            const { email, telephone } = req.body;
+            const { identifiant, code, mot_de_passe } = req.body;
 
-            if (!email && !telephone) {
-                throw new AppError('Email ou téléphone requis', 400);
+            // Vérification des champs requis
+            if (!identifiant || !identifiant.trim()) {
+                throw new AppError('Email ou numéro de téléphone requis', 400);
             }
 
-            let query;
-            let params;
+            if (!code || !code.trim()) {
+                throw new AppError('Code de vérification requis', 400);
+            }
 
-            if (email) {
-                query = `SELECT id, numero_de_telephone FROM COMPTES WHERE email = $1 AND est_supprime = false`;
-                params = [email];
+            // Déterminer si l'identifiant est un email ou un téléphone
+            const isEmail = identifiant.includes('@') && identifiant.includes('.');
+            const isPhone = /^[\+]?[0-9\s\-\(\)]{8,20}$/.test(identifiant);
+            
+            let whereCondition = '';
+            const queryParams = [];
+            
+            if (isEmail) {
+                whereCondition = 'email = $1';
+                queryParams.push(identifiant.trim());
+            } else if (isPhone) {
+                whereCondition = 'numero_de_telephone = $1';
+                queryParams.push(identifiant.trim());
             } else {
-                query = `SELECT id, email, numero_de_telephone FROM COMPTES WHERE numero_de_telephone = $1 AND est_supprime = false`;
-                params = [telephone];
+                throw new AppError('Format d\'identifiant invalide. Utilisez un email ou un numéro de téléphone valide.', 400);
             }
 
-            const result = await client.query(query, params);
+            // Ajouter la condition d'utilisateur non supprimé
+            const query = `
+                SELECT id, code_authentification, code_authentification_expiration, statut, 
+                    email, nom_utilisateur_compte, numero_de_telephone
+                FROM COMPTES 
+                WHERE ${whereCondition} AND est_supprime = false
+            `;
+
+            const result = await client.query(query, queryParams);
 
             if (result.rows.length === 0) {
                 throw new AppError('Utilisateur non trouvé', 404);
@@ -879,9 +855,187 @@ class AuthController {
 
             const user = result.rows[0];
 
+
+            // Vérifier le code
+            if (user.code_authentification !== code) {
+                throw new AppError('Code de vérification invalide', 400);
+            }
+
+            // Vérifier l'expiration du code
+            if (new Date() > new Date(user.code_authentification_expiration)) {
+                throw new AppError('Code de vérification expiré', 400);
+            }
+            // suppression du code d'authentification et de son expiration
+            await client.query(
+                `UPDATE COMPTES 
+                SET code_authentification = NULL,
+                    code_authentification_expiration = NULL, date_mise_a_jour = NOW()
+                WHERE id = $1`,
+                [user.id]
+            );
+            // Journaliser la vérification
+            await AuditService.log({
+                action: 'VERIFY_CODE',
+                ressource_type: 'COMPTES',
+                ressource_id: user.id,
+                donnees_apres: {
+                    id: user.id,
+                    statut: 'EST_AUTHENTIFIE',
+                    verification_method: isEmail ? 'EMAIL' : 'SMS'
+                },
+                adresse_ip: req.ip,
+                user_agent: req.get('User-Agent')
+            });
+
+            res.status(200).json({
+                success: true,
+                message: 'Compte vérifié avec succès',
+                data: {
+                    utilisateur: {
+                        id: user.id,
+                        nom_utilisateur: user.nom_utilisateur_compte,
+                        email: user.email || null,
+                        telephone: user.numero_de_telephone,
+                        statut: 'EST_AUTHENTIFIE'
+                    }
+                }
+            });
+
+        } catch (error) {
+            next(error);
+        } finally {
+            client.release();
+        }
+    }
+    /**
+     * Modifier le mot de passe via la vérification du code
+     * POST /api/v1/auth/modify-mdp-verification
+     */
+    static async modifierMotDePasseViaVerificationOTP(req, res, next){
+        const client = await db.getClient();
+        try {
+            const { identifiant, nouveau_mot_de_passe } = req.body;
+                // Vérification des champs requis
+            if (!identifiant || !identifiant.trim()) {
+                throw new AppError('Email ou numéro de téléphone requis', 400);
+            }
+            if (!nouveau_mot_de_passe || !nouveau_mot_de_passe.trim()) {
+                throw new AppError('Nouveau mot de passe requis', 400);
+            }
+                // Déterminer si l'identifiant est un email ou un téléphone
+            const isEmail = identifiant.includes('@') && identifiant.includes('.');
+            const isPhone = /^[\+]?[0-9\s\-\(\)]{8,20}$/.test(identifiant);
+            let whereCondition = '';
+            const queryParams = [];
+            if (isEmail) {
+                whereCondition = 'email = $1';
+                queryParams.push(identifiant.trim());
+            }
+            else if (isPhone) {
+                whereCondition = 'numero_de_telephone = $1';
+                queryParams.push(identifiant.trim());
+            }
+            else {
+                throw new AppError('Format d\'identifiant invalide. Utilisez un email ou un numéro de téléphone valide.', 400);
+            }
+
+                // Ajouter la condition d'utilisateur non supprimé
+            const query = `
+                SELECT id, code_authentification, code_authentification_expiration, statut, 
+                    email, nom_utilisateur_compte, numero_de_telephone
+                FROM COMPTES 
+                WHERE ${whereCondition} AND est_supprime = false
+            `;
+            const result = await client.query(query, queryParams);
+
+            if (result.rows.length === 0) {
+                throw new AppError('Utilisateur non trouvé', 404);
+            }
+
+                //hashage du mot de passe
+            const saltRounds = 10;
+            const motDePasseHash = await bcrypt.hash(nouveau_mot_de_passe, saltRounds);
+            // Mettre à jour le mot de passe du compte
+            await client.query(
+                `UPDATE COMPTES 
+                SET mot_de_passe_compte = $1, date_mise_a_jour = NOW()
+                WHERE id = $2`,
+                [motDePasseHash, result.rows[0].id]
+            );
+                // Journaliser la modification de mot de passe
+            await AuditService.log({
+                action: 'MODIFY_PASSWORD',
+                ressource_type: 'COMPTES',
+                ressource_id: result.rows[0].id,
+                donnees_apres: {
+                    id: result.rows[0].id,
+                    nom_utilisateur: result.rows[0].nom_utilisateur_compte,
+                    email: result.rows[0].email || null,
+                    telephone: result.rows[0].numero_de_telephone
+                },
+                adresse_ip: req.ip,
+                user_agent: req.get('User-Agent')
+            });
+            console.log(`Mot de passe modifié pour l'utilisateur ID ${result.rows[0].id} (${result.rows[0].nom_utilisateur_compte})`);
+            res.status(200).json({
+                success: true,
+                message: 'Mot de passe modifié avec succès'
+            });
+        } catch(error){
+            throw AppError('Erreur lors de la modification du mot de passe', error);
+        }
+            finally {
+            client.release();
+        }
+    }
+    /**
+     * Renvoyer le code de vérification
+     * POST /api/v1/auth/resend-code
+     */
+    static async resendVerificationCode(req, res, next) {
+        const client = await db.getClient();
+        try {
+            const { identifiant } = req.body;
+
+            if (!identifiant || !identifiant.trim()) {
+                throw new AppError('Email ou téléphone requis', 400);
+            }
+            // Déterminer si l'identifiant est un email ou un téléphone
+            const isEmail = identifiant.includes('@') && identifiant.includes('.');
+            const isPhone = /^[\+]?[0-9\s\-\(\)]{8,20}$/.test(identifiant);
+
+            let whereCondition = '';
+            const queryParams = [];
+
+            if (isEmail) {
+                whereCondition = `email = $1`;
+                queryParams.push(identifiant.trim());
+            } else if (isPhone) {
+                whereCondition = 'numero_de_telephone = $1';
+                queryParams.push(identifiant.trim());
+            } else {
+                throw new AppError('Format d\'identifiant invalide. Utilisez un email ou un numéro de téléphone valide.', 400);
+            }
+
+            const query = `
+                    SELECT id, statut, 
+                    nom_utilisateur_compte
+                    FROM COMPTES 
+                    WHERE ${whereCondition} AND est_supprime = false
+                `;
+            const result = await client.query(query, queryParams);
+
+            if (result.rows.length === 0) {
+                throw new AppError('Utilisateur non trouvé', 404);
+            }
+
+            const user = result.rows[0];
+
+
             // Générer nouveau code
-            const codeAuth = Math.floor(100000 + Math.random() * 900000).toString();
+            const codeAuth = await this._generateUniqueCode(client);
             const codeExpiration = new Date(Date.now() + 15 * 60 * 1000);
+            
 
             await client.query(
                 `UPDATE COMPTES 
@@ -890,10 +1044,15 @@ class AuthController {
                 [codeAuth, codeExpiration, user.id]
             );
 
-            // Envoyer le code par SMS
-            await SmsService.sendVerificationCode(user.numero_de_telephone, codeAuth);
+            if (isEmail){
+                await EmailService.sendVerificationEmail(identifiant, codeAuth, user.nom_utilisateur_compte);
+            }else{
+                // Envoyer le code par SMS
+                await SmsService.sendVerificationCode(identifiant, codeAuth, user.nom_utilisateur_compte);
+            }
+            
 
-            res.json({
+            res.status(200).json({
                 success: true,
                 message: 'Nouveau code de vérification envoyé'
             });
@@ -905,6 +1064,84 @@ class AuthController {
         }
     }
 
+    /**
+     * envoyer le code de vérification
+     * POST /api/v1/auth/send-code
+     */
+    static async sendVerificationCode(req, res, next) {
+        const client = await db.getClient();
+        try {
+            const { identifiant } = req.body;
+
+            if (!identifiant || !identifiant.trim()) {
+                throw new AppError('Email ou téléphone requis', 400);
+            }
+            // Déterminer si l'identifiant est un email ou un téléphone
+            const isEmail = identifiant.includes('@') && identifiant.includes('.');
+            const isPhone = /^[\+]?[0-9\s\-\(\)]{8,20}$/.test(identifiant);
+
+            let whereCondition = '';
+            const queryParams = [];
+
+            if (isEmail) {
+                whereCondition = `email = $1`;
+                queryParams.push(identifiant.trim());
+            } else if (isPhone) {
+                whereCondition = 'numero_de_telephone = $1';
+                queryParams.push(identifiant.trim());
+            } else {
+                throw new AppError('Format d\'identifiant invalide. Utilisez un email ou un numéro de téléphone valide.', 400);
+            }
+
+            const query = `
+                    SELECT id, statut, 
+                    nom_utilisateur_compte
+                    FROM COMPTES 
+                    WHERE ${whereCondition} AND est_supprime = false
+                `;
+            const result = await client.query(query, queryParams);
+
+            if (result.rows.length === 0) {
+                throw new AppError('Utilisateur non trouvé', 404);
+            }
+
+            const user = result.rows[0];
+
+            if (user.statut !== 'EST_AUTHENTIFIE'){
+                throw new AppError('Vôtre compte n\'est pas authentifié, veuillez contacter notre service client ou créer un nouveau compte');
+            }
+
+            // Générer nouveau code
+            const codeAuth = await this._generateUniqueCode(client);
+            const codeExpiration = new Date(Date.now() + 15 * 60 * 1000);
+            
+
+            await client.query(
+                `UPDATE COMPTES 
+                 SET code_authentification = $1, code_authentification_expiration = $2
+                 WHERE id = $3`,
+                [codeAuth, codeExpiration, user.id]
+            );
+
+            if (isEmail){
+                await EmailService.sendVerificationEmail(identifiant, codeAuth, user.nom_utilisateur_compte);
+            }else{
+                // Envoyer le code par SMS
+                await SmsService.sendVerificationCode(identifiant, codeAuth, user.nom_utilisateur_compte);
+            }
+            
+
+            res.status(200).json({
+                success: true,
+                message: 'Nouveau code de vérification envoyé'
+            });
+
+        } catch (error) {
+            next(error);
+        } finally {
+            client.release();
+        }
+    }
     /**
      * Générer un code unique
      */
@@ -927,6 +1164,8 @@ class AuthController {
         
         return code;
     }
+
+
 }
 
 module.exports = AuthController;

@@ -6,7 +6,7 @@ const FileService = require('../../services/file/FileService');
 const AuditService = require('../../services/audit/AuditService');
 const NotificationService = require('../../services/notification/NotificationService');
 const CacheService = require('../../services/cache/CacheService');
-const { logInfo, logError, logDebug } = require('../../configuration/logger');
+const logger = require('../../configuration/logger');
 
 class ProduitBoutiqueController {
     /**
@@ -126,7 +126,7 @@ class ProduitBoutiqueController {
 
             await client.query('COMMIT');
 
-            logInfo(`Produit créé: ${nouveauProduit.id} - ${nom_produit} pour boutique ${boutiqueId}`);
+            logger.info(`Produit créé: ${nouveauProduit.id} - ${nom_produit} pour boutique ${boutiqueId}`);
 
             res.status(201).json({
                 status: 'success',
@@ -135,7 +135,7 @@ class ProduitBoutiqueController {
 
         } catch (error) {
             await client.query('ROLLBACK');
-            logError('Erreur création produit:', error);
+            logger.error('Erreur création produit:', error);
             next(error);
         } finally {
             client.release();
@@ -147,7 +147,7 @@ class ProduitBoutiqueController {
      * @route GET /api/v1/boutiques/:boutiqueId/produits
      * @access PUBLIC
      */
-    async findAll(req, res, next) {
+    /*async findAll(req, res, next) {
         const client = await db.getClient();
         try {
             const { boutiqueId } = req.params;
@@ -172,6 +172,16 @@ class ProduitBoutiqueController {
             const offset = (page - 1) * limit;
             const params = [boutiqueId];
             let paramIndex = 2;
+            const testQuery = await client.query(
+                'SELECT COUNT(*) FROM PRODUITSBOUTIQUE WHERE id_boutique = $1',
+                [boutiqueId]
+            );
+            logger.debug(`Produits en base pour boutique ${boutiqueId}: ${testQuery.rows[0].count}`);
+                const testDispo = await client.query(
+                'SELECT COUNT(*) FROM PRODUITSBOUTIQUE WHERE id_boutique = $1 AND est_disponible = true',
+                [boutiqueId]
+            );
+            logger.debug(`Produits disponibles: ${testDispo.rows[0].count}`);
             const conditions = ['p.id_boutique = $1'];
 
             // 1. CONSTRUCTION DYNAMIQUE DES FILTRES
@@ -304,13 +314,230 @@ class ProduitBoutiqueController {
             });
 
         } catch (error) {
-            logError('Erreur récupération produits:', error);
+            logger.error('Erreur récupération produits:', error);
+            next(error);
+        } finally {
+            client.release();
+        }
+    }*/
+    async findAll(req, res, next) {
+        const client = await db.getClient();
+        try {
+            const { boutiqueId } = req.params;
+            const {
+                page = 1,
+                limit = 20,
+                categorie_id,
+                search,
+                prix_min,
+                prix_max,
+                en_promo,
+                disponible,
+                tri = 'date_creation_desc',
+                avec_stock,
+                tags,
+                en_rupture,
+                nouveau_produit_jours,
+                refresh = false  // Force le rafraîchissement du cache
+            } = req.query;
+
+            // Génération d'une clé de cache unique basée sur tous les paramètres
+            const cacheKey = `produits:list:${boutiqueId}:${JSON.stringify({
+                page, limit, categorie_id, search, prix_min, prix_max, 
+                en_promo, disponible, tri, avec_stock, tags, en_rupture, 
+                nouveau_produit_jours
+            })}`;
+
+            // Vérification du cache (sauf si refresh demandé)
+            if (refresh !== 'true') {
+                const cachedData = await CacheService.get(cacheKey);
+                if (cachedData) {
+                    logger.debug(`Cache hit pour produits boutique ${boutiqueId}`);
+                    return res.json({
+                        ...cachedData,
+                        from_cache: true
+                    });
+                }
+            }
+
+            const offset = (page - 1) * limit;
+            const params = [boutiqueId];
+            let paramIndex = 2;
+            
+            // Construction des conditions
+            const conditions = ['p.id_boutique = $1'];
+            
+            // Filtre disponibilité
+            if (disponible === undefined) {
+                conditions.push('p.est_disponible = true');
+            } else if (disponible === 'true') {
+                conditions.push('p.est_disponible = true');
+            } else if (disponible === 'false') {
+                conditions.push('p.est_disponible = false');
+            }
+            
+            // Filtre catégorie
+            if (categorie_id) {
+                conditions.push(`p.id_categorie = $${paramIndex}`);
+                params.push(categorie_id);
+                paramIndex++;
+            }
+            
+            // Recherche textuelle
+            if (search) {
+                conditions.push(`(
+                    p.nom_produit ILIKE $${paramIndex} 
+                    OR p.description_produit ILIKE $${paramIndex}
+                    OR p.slug_produit ILIKE $${paramIndex}
+                )`);
+                params.push(`%${search}%`);
+                paramIndex++;
+            }
+            
+            // Filtres prix
+            if (prix_min) {
+                conditions.push(`p.prix_unitaire_produit >= $${paramIndex}`);
+                params.push(parseFloat(prix_min));
+                paramIndex++;
+            }
+            
+            if (prix_max) {
+                conditions.push(`p.prix_unitaire_produit <= $${paramIndex}`);
+                params.push(parseFloat(prix_max));
+                paramIndex++;
+            }
+            
+            // Filtre promotion
+            if (en_promo === 'true') {
+                conditions.push(`p.prix_promo IS NOT NULL AND p.prix_promo < p.prix_unitaire_produit`);
+            }
+            
+            // Filtre rupture de stock
+            if (en_rupture === 'true') {
+                conditions.push(`p.quantite = 0`);
+            }
+            
+            // Filtre tags
+            if (tags) {
+                const tagsArray = tags.split(',');
+                conditions.push(`p.donnees_supplementaires->'tags' ?| $${paramIndex}`);
+                params.push(tagsArray);
+                paramIndex++;
+            }
+            
+            // Filtre nouveauté (uniquement si explicitement demandé)
+            if (nouveau_produit_jours !== undefined) {
+                const jours = parseInt(nouveau_produit_jours);
+                if (!isNaN(jours) && jours > 0) {
+                    conditions.push(`p.date_creation >= NOW() - INTERVAL '${jours} days'`);
+                }
+            }
+            
+            // Récupération du nombre total (avec cache spécifique pour le count)
+            const countCacheKey = `produits:count:${boutiqueId}:${Buffer.from(conditions.join('|')).toString('base64').substring(0, 100)}`;
+            let total;
+            
+            const cachedCount = await CacheService.get(countCacheKey);
+            if (cachedCount !== null && refresh !== 'true') {
+                total = cachedCount;
+                logger.debug(`Cache hit pour count boutique ${boutiqueId}`);
+            } else {
+                const countQuery = `
+                    SELECT COUNT(*) 
+                    FROM PRODUITSBOUTIQUE p
+                    WHERE ${conditions.join(' AND ')}
+                `;
+                const countResult = await client.query(countQuery, params);
+                total = parseInt(countResult.rows[0].count);
+                // Cache du count pour 1 minute (car plus sensible aux modifications)
+                await CacheService.set(countCacheKey, 60, total);
+            }
+            
+            if (total === 0) {
+                const emptyResponse = {
+                    status: 'success',
+                    data: [],
+                    pagination: {
+                        page: parseInt(page),
+                        limit: parseInt(limit),
+                        total: 0,
+                        pages: 0,
+                        has_next: false,
+                        has_prev: false
+                    },
+                    filters: await this._getAvailableFilters(client, boutiqueId)
+                };
+                // Mettre en cache la réponse vide pour 30 secondes
+                await CacheService.set(cacheKey, 30, emptyResponse);
+                return res.json(emptyResponse);
+            }
+            
+            // Construction des champs à sélectionner
+            let selectFields = `
+                p.id, p.nom_produit, p.slug_produit, p.image_produit, p.images_produit,
+                p.description_produit, p.donnees_supplementaires, p.prix_unitaire_produit,
+                p.prix_promo, p.quantite, p.id_categorie, p.id_boutique, p.est_disponible,
+                p.date_creation, p.date_mise_a_jour,
+                c.nom_categorie,
+                c.slug_categorie as categorie_slug
+            `;
+            
+            if (avec_stock === 'true') {
+                selectFields += `,
+                    CASE 
+                        WHEN p.quantite = -1 THEN 'illimité'
+                        WHEN p.quantite = 0 THEN 'rupture'
+                        WHEN p.quantite <= 5 THEN 'stock_faible'
+                        ELSE 'disponible'
+                    END as statut_stock`;
+            }
+            
+            // Requête principale
+            const query = `
+                SELECT ${selectFields}
+                FROM PRODUITSBOUTIQUE p
+                LEFT JOIN CATEGORIES_BOUTIQUE c ON c.id = p.id_categorie
+                WHERE ${conditions.join(' AND ')}
+                ${this._buildOrderBy(tri)}
+                LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+            `;
+            
+            params.push(parseInt(limit), offset);
+            
+            const result = await client.query(query, params);
+            
+            const response = {
+                status: 'success',
+                data: result.rows,
+                pagination: {
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    total,
+                    pages: Math.ceil(total / limit),
+                    has_next: offset + limit < total,
+                    has_prev: page > 1
+                },
+                filters: await this._getAvailableFilters(client, boutiqueId),
+                summary: result.rows.length > 0 ? {
+                    total_produits: total,
+                    produits_disponibles: result.rows.filter(p => p.est_disponible).length,
+                    prix_min: Math.min(...result.rows.map(p => parseFloat(p.prix_unitaire_produit))),
+                    prix_max: Math.max(...result.rows.map(p => parseFloat(p.prix_unitaire_produit)))
+                } : null
+            };
+            
+            // Mise en cache de la réponse (5 minutes)
+            await CacheService.set(cacheKey, 300, response);
+            
+            res.json(response);
+
+        } catch (error) {
+            logger.error('Erreur récupération produits:', error);
             next(error);
         } finally {
             client.release();
         }
     }
-
     /**
      * Récupérer un produit par son ID ou slug avec toutes ses données
      * @route GET /api/v1/produits/:identifier
@@ -399,7 +626,7 @@ class ProduitBoutiqueController {
 
             // 6. INCRÉMENTATION COMPTEUR VUES (asynchrone - ne pas attendre)
             this._incrementViewCount(produit.id).catch(err => 
-                logError('Erreur incrémentation vues:', err)
+                logger.error('Erreur incrémentation vues:', err)
             );
 
             res.json({
@@ -408,7 +635,7 @@ class ProduitBoutiqueController {
             });
 
         } catch (error) {
-            logError('Erreur récupération produit:', error);
+            logger.error('Erreur récupération produit:', error);
             next(error);
         } finally {
             client.release();
@@ -491,7 +718,7 @@ class ProduitBoutiqueController {
 
             await client.query('COMMIT');
 
-            logInfo(`Produit mis à jour: ${id} par utilisateur ${req.user?.id}`);
+            logger.info(`Produit mis à jour: ${id} par utilisateur ${req.user?.id}`);
 
             res.json({
                 status: 'success',
@@ -501,7 +728,7 @@ class ProduitBoutiqueController {
 
         } catch (error) {
             await client.query('ROLLBACK');
-            logError('Erreur mise à jour produit:', error);
+            logger.error('Erreur mise à jour produit:', error);
             next(error);
         } finally {
             client.release();
@@ -627,7 +854,7 @@ class ProduitBoutiqueController {
 
         } catch (error) {
             await client.query('ROLLBACK');
-            logError('Erreur mise à jour stock:', error);
+            logger.error('Erreur mise à jour stock:', error);
             next(error);
         } finally {
             client.release();
@@ -801,18 +1028,13 @@ class ProduitBoutiqueController {
             });
 
         } catch (error) {
-            logError('Erreur recherche produits:', error);
+            logger.error('Erreur recherche produits:', error);
             next(error);
         } finally {
             client.release();
         }
     }
 
-    /**
-     * Obtenir les produits en promotion
-     * @route GET /api/v1/produits/promos
-     * @access PUBLIC
-     */
     async getPromotions(req, res, next) {
         const client = await db.getClient();
         try {
@@ -838,6 +1060,26 @@ class ProduitBoutiqueController {
                 paramIndex++;
             }
 
+            // ✅ Définir la colonne de tri
+            let orderByColumn;
+            let orderByDirection;
+            
+            switch (tri) {
+                case 'prix_asc':
+                    orderByColumn = 'p.prix_promo';
+                    orderByDirection = 'ASC';
+                    break;
+                case 'prix_desc':
+                    orderByColumn = 'p.prix_promo';
+                    orderByDirection = 'DESC';
+                    break;
+                case 'reduction_desc':
+                default:
+                    orderByColumn = '((p.prix_unitaire_produit - p.prix_promo) / p.prix_unitaire_produit)';
+                    orderByDirection = 'DESC';
+                    break;
+            }
+
             const query = `
                 SELECT 
                     p.*,
@@ -848,13 +1090,7 @@ class ProduitBoutiqueController {
                 FROM PRODUITSBOUTIQUE p
                 JOIN BOUTIQUES b ON b.id = p.id_boutique
                 WHERE ${conditions.join(' AND ')}
-                ORDER BY 
-                    CASE 
-                        WHEN '${tri}' = 'reduction_desc' THEN ((p.prix_unitaire_produit - p.prix_promo) / p.prix_unitaire_produit)
-                        WHEN '${tri}' = 'prix_asc' THEN p.prix_promo
-                        WHEN '${tri}' = 'prix_desc' THEN p.prix_promo DESC
-                        ELSE p.date_creation DESC
-                    END
+                ORDER BY ${orderByColumn} ${orderByDirection}
                 LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
             `;
 
@@ -872,7 +1108,9 @@ class ProduitBoutiqueController {
                 FROM PRODUITSBOUTIQUE p
                 WHERE ${conditions.join(' AND ')}
             `;
-            const statsResult = await client.query(statsQuery, params.slice(0, -2));
+            
+            const statsParams = params.slice(0, -2);
+            const statsResult = await client.query(statsQuery, statsParams);
             const total = parseInt(statsResult.rows[0].total_promos);
 
             res.json({
@@ -888,13 +1126,12 @@ class ProduitBoutiqueController {
             });
 
         } catch (error) {
-            logError('Erreur récupération promotions:', error);
+            logger.error('Erreur récupération promotions:', error);
             next(error);
         } finally {
             client.release();
         }
     }
-
     /**
      * Supprimer une image d'un produit
      * @route DELETE /api/v1/produits/:id/images/:imageIndex
@@ -955,7 +1192,7 @@ class ProduitBoutiqueController {
 
         } catch (error) {
             await client.query('ROLLBACK');
-            logError('Erreur suppression image:', error);
+            logger.error('Erreur suppression image:', error);
             next(error);
         } finally {
             client.release();
@@ -1041,7 +1278,7 @@ class ProduitBoutiqueController {
 
         } catch (error) {
             await client.query('ROLLBACK');
-            logError('Erreur duplication produit:', error);
+            logger.error('Erreur duplication produit:', error);
             next(error);
         } finally {
             client.release();
@@ -1128,7 +1365,7 @@ class ProduitBoutiqueController {
 
         } catch (error) {
             await client.query('ROLLBACK');
-            logError('Erreur suppression produit:', error);
+            logger.error('Erreur suppression produit:', error);
             next(error);
         } finally {
             client.release();
@@ -1587,9 +1824,8 @@ class ProduitBoutiqueController {
                 COUNT(*) FILTER (WHERE note_globale = 4) as quatre_etoiles,
                 COUNT(*) FILTER (WHERE note_globale = 3) as trois_etoiles,
                 COUNT(*) FILTER (WHERE note_globale = 2) as deux_etoiles,
-                COUNT(*) FILTER (WHERE note_globale = 1) as une_etoile,
-                ROUND(AVG(CASE WHEN note_qualite IS NOT NULL THEN note_qualite END)::NUMERIC, 2) as qualite_moyenne,
-                ROUND(AVG(CASE WHEN note_rapport_prix IS NOT NULL THEN note_rapport_prix END)::NUMERIC, 2) as rapport_prix_moyen
+                COUNT(*) FILTER (WHERE note_globale = 1) as une_etoile
+                -- Supprimer note_qualite et note_rapport_prix si elles n'existent pas
             FROM AVIS
             WHERE entite_type = 'PRODUIT_BOUTIQUE' 
             AND entite_id = $1 
@@ -1807,6 +2043,32 @@ class ProduitBoutiqueController {
         );
         return result.rows;
     }
+    /**
+    * Invalider le cache lié aux produits d'une boutique
+    */
+    async _invalidateProductCache(boutiqueId, categorieId = null) {
+        try {
+            // Supprimer tous les caches liés à cette boutique
+            const patterns = [
+                `produits:list:${boutiqueId}:*`,
+                `produits:count:${boutiqueId}:*`,
+                `boutique:${boutiqueId}:produits*`
+            ];
+            
+            if (categorieId) {
+                patterns.push(`produits:list:${boutiqueId}:*"id_categorie":${categorieId}*`);
+            }
+            
+            for (const pattern of patterns) {
+                await CacheService.delPattern(pattern);
+            }
+            
+            logger.debug(`Cache invalidé pour boutique ${boutiqueId}`);
+        } catch (error) {
+            logger.error(`Erreur invalidation cache:`, error);
+        }
+    }
+
 }
 
 module.exports = new ProduitBoutiqueController();

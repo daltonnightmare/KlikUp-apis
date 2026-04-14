@@ -140,7 +140,7 @@ class PasswordController {
      * POST /api/v1/auth/password/reset
      */
     static async resetPassword(req, res, next) {
-        const client = await db.getConnection();
+        const client = await db.getClient();
         try {
             const { token, code, nouveau_mot_de_passe } = req.body;
 
@@ -240,7 +240,7 @@ class PasswordController {
      * POST /api/v1/auth/password/change
      */
     static async changePassword(req, res, next) {
-        const client = await db.getConnection();
+        const client = await db.getClient();
         try {
             const { ancien_mot_de_passe, nouveau_mot_de_passe } = req.body;
             const userId = req.user.id;

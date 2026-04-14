@@ -201,7 +201,7 @@ class Logger {
         try {
             // ✅ Vérifications de sécurité
             if (!req || !res) {
-                this.debug('Tentative de log HTTP avec req/res manquants');
+                //this.debug('Tentative de log HTTP avec req/res manquants');
                 return;
             }
 
@@ -230,7 +230,7 @@ class Logger {
             }
         } catch (error) {
             // Ne pas planter à cause d'une erreur de log
-            this.debug('Erreur dans http logger:', { error: error.message });
+            //this.debug('Erreur dans http logger:', { error: error.message });
         }
     }
 

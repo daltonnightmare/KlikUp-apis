@@ -256,7 +256,18 @@ class EmailService {
       year: new Date().getFullYear()
     };
     
-    return this.sendTemplateEmail(to, 'verify-email', variables);
+    return this.sendTemplateEmail(to, 'verify_email', variables);
+  }
+  
+  async sendVerificationEmail4MDP(to, code, prenom) {
+    const variables = {
+      prenom: prenom || 'utilisateur',
+      code,
+      expiresIn: '15 minutes',
+      year: new Date().getFullYear()
+    };
+    
+    return this.sendTemplateEmail(to, 'verify_email_for_password_reset', variables);
   }
 
   /**

@@ -16,6 +16,7 @@ const cacheMiddleware = require('../middlewares/cache.middleware');
 const CompagnieController = require('../../controllers/transport/CompagnieController');
 const EmplacementController = require('../../controllers/transport/EmplacementController');
 const TicketController = require('../../controllers/transport/TicketController');
+const ServiceTransportController = require('../../controllers/transport/ServiceController');
 
 // ==================== AUTHENTIFICATION GLOBALE ====================
 // Toutes les routes de transport nécessitent une authentification
@@ -33,7 +34,8 @@ router.use(authMiddleware.authenticate);
  * Réponse: { success, data: [compagnies], pagination }
  */
 router.get('/compagnies',
-    roleMiddleware.isAdmin(),
+    /*roleMiddleware.isAdmin(),*/
+    /*roleMiddleware.isAtLeast('UTILISATEUR_PRIVE_SIMPLE'),*/
     validationMiddleware.validate([
         query('page').optional().isInt({ min: 1 }),
         query('limit').optional().isInt({ min: 1, max: 100 }),
@@ -340,7 +342,7 @@ router.get('/tickets',
         query('prix_min').optional().isFloat({ min: 0 }),
         query('prix_max').optional().isFloat({ min: 0 }),
         query('recherche').optional().trim().isLength({ min: 2 }),
-        query('tri').optional().isIn(['prix_asc', 'prix_desc', 'nom_asc', 'ventes_desc'])
+        query('tri').optional().isIn(['prix_asc', 'prix_desc', 'nom_asc', 'ventes_desc', 'date_creation_desc', 'date_creation_asc'])
     ]),
     TicketController.getAll.bind(TicketController)
 );
@@ -472,6 +474,192 @@ router.delete('/tickets/:id',
         param('id').isInt()
     ]),
     TicketController.delete.bind(TicketController)
+);
+
+
+// ==================== IV. SERVICES DE TRANSPORT ====================
+// Gestion des abonnements et services de transport
+
+/**
+ * GET /api/v1/transport/services
+ * Récupérer tous les services de transport
+ * Query: 
+ *   - page=1, limit=20
+ *   - actif, type_service (ABONNEMENT_MENSUEL|BIMENSUEL|TRIMESTRIEL|ANNUEL)
+ *   - compagnie_id, emplacement_id
+ *   - recherche
+ * Auth: Bearer <token>
+ * Cache: 5 minutes
+ * Réponse: { success, data: [services], pagination }
+ */
+router.get('/services',
+    cacheMiddleware.cache(300), // 5 minutes
+    validationMiddleware.validate([
+        query('page').optional().isInt({ min: 1 }),
+        query('limit').optional().isInt({ min: 1, max: 100 }),
+        query('actif').optional().isBoolean(),
+        query('type_service').optional().isIn(['ABONNEMENT_MENSUEL', 'BIMENSUEL', 'TRIMESTRIEL', 'ANNUEL']),
+        query('compagnie_id').optional().isInt(),
+        query('emplacement_id').optional().isInt(),
+        query('recherche').optional().trim().isLength({ min: 2 })
+    ]),
+    ServiceTransportController.getAll.bind(ServiceTransportController)
+);
+
+/**
+ * GET /api/v1/transport/services/:id
+ * Récupérer un service de transport par ID
+ * Params: id (entier)
+ * Auth: Bearer <token>
+ * Réponse: { success, data: service_avec_stats }
+ */
+router.get('/services/:id',
+    validationMiddleware.validate([
+        param('id').isInt()
+    ]),
+    ServiceTransportController.getById.bind(ServiceTransportController)
+);
+
+/**
+ * GET /api/v1/transport/services/type/:type
+ * Récupérer les services par type
+ * Params: type (ABONNEMENT_MENSUEL|BIMENSUEL|TRIMESTRIEL|ANNUEL)
+ * Query: actif=true
+ * Auth: Bearer <token>
+ * Cache: 5 minutes
+ * Réponse: { success, data: [services], type, count }
+ */
+router.get('/services/type/:type',
+    cacheMiddleware.cache(300), // 5 minutes
+    validationMiddleware.validate([
+        param('type').isIn(['ABONNEMENT_MENSUEL', 'BIMENSUEL', 'TRIMESTRIEL', 'ANNUEL']),
+        query('actif').optional().isBoolean()
+    ]),
+    ServiceTransportController.getByType.bind(ServiceTransportController)
+);
+
+/**
+ * GET /api/v1/transport/emplacements/:emplacementId/services
+ * Récupérer les services disponibles pour un emplacement
+ * Params: emplacementId (entier)
+ * Query: actif=true
+ * Auth: Bearer <token>
+ * Cache: 5 minutes
+ * Réponse: { success, data: [services], count }
+ */
+router.get('/emplacements/:emplacementId/services',
+    cacheMiddleware.cache(300), // 5 minutes
+    validationMiddleware.validate([
+        param('emplacementId').isInt(),
+        query('actif').optional().isBoolean()
+    ]),
+    ServiceTransportController.getServicesByEmplacement.bind(ServiceTransportController)
+);
+
+/**
+ * GET /api/v1/transport/services/stats/globales
+ * Récupérer les statistiques des services
+ * Auth: Bearer <token> + ADMIN
+ * Cache: 10 minutes
+ * Réponse: { success, data: { global, par_type, top_services } }
+ */
+router.get('/services/stats/globales',
+    roleMiddleware.isAdmin(),
+    cacheMiddleware.cache(600), // 10 minutes
+    ServiceTransportController.getStats.bind(ServiceTransportController)
+);
+
+/**
+ * POST /api/v1/transport/services
+ * Créer un nouveau service de transport
+ * Body: {
+ *   nom_service, type_service, prix_service,
+ *   donnees_json_service?, duree_validite_jours?,
+ *   compagnie_id, emplacement_id?
+ * }
+ * Auth: Bearer <token> + ADMIN
+ * Réponse: 201 { success, data: service, message }
+ */
+router.post('/services',
+    roleMiddleware.isAdmin(),
+    validationMiddleware.validate([
+        body('nom_service').notEmpty().trim().isLength({ min: 2, max: 255 }),
+        body('type_service').isIn(['ABONNEMENT_MENSUEL', 'BIMENSUEL', 'TRIMESTRIEL', 'ANNUEL']),
+        body('prix_service').isFloat({ min: 0 }),
+        body('donnees_json_service').optional().isObject(),
+        body('duree_validite_jours').optional().isInt({ min: 1 }),
+        body('compagnie_id').isInt(),
+        body('emplacement_id').optional().isInt()
+    ]),
+    ServiceTransportController.create.bind(ServiceTransportController)
+);
+
+/**
+ * PUT /api/v1/transport/services/:id
+ * Mettre à jour un service de transport
+ * Params: id (entier)
+ * Body: { nom_service?, type_service?, prix_service?, donnees_json_service?, duree_validite_jours?, actif?, compagnie_id?, emplacement_id? }
+ * Auth: Bearer <token> + ADMIN
+ * Réponse: { success, data: service, message }
+ */
+router.put('/services/:id',
+    roleMiddleware.isAdmin(),
+    validationMiddleware.validate([
+        param('id').isInt(),
+        body('nom_service').optional().trim().isLength({ min: 2, max: 255 }),
+        body('type_service').optional().isIn(['ABONNEMENT_MENSUEL', 'BIMENSUEL', 'TRIMESTRIEL', 'ANNUEL']),
+        body('prix_service').optional().isFloat({ min: 0 }),
+        body('donnees_json_service').optional().isObject(),
+        body('duree_validite_jours').optional().isInt({ min: 1 }),
+        body('actif').optional().isBoolean(),
+        body('compagnie_id').optional().isInt(),
+        body('emplacement_id').optional().isInt({ allowNull: true })
+    ]),
+    ServiceTransportController.update.bind(ServiceTransportController)
+);
+
+/**
+ * DELETE /api/v1/transport/services/:id
+ * Supprimer un service de transport (soft delete si achats existent)
+ * Params: id (entier)
+ * Auth: Bearer <token> + ADMIN
+ * Réponse: { success, message }
+ */
+router.delete('/services/:id',
+    roleMiddleware.isAdmin(),
+    validationMiddleware.validate([
+        param('id').isInt()
+    ]),
+    ServiceTransportController.delete.bind(ServiceTransportController)
+);
+
+// ==================== V. ACHATS DE SERVICES ====================
+
+/**
+ * POST /api/v1/transport/services/:id/acheter
+ * Acheter un service de transport
+ * Params: id (entier)
+ * Body: { info_acheteur? }
+ * Auth: Bearer <token>
+ * Réponse: 201 { success, data: { achat, service }, message }
+ */
+router.post('/services/:id/acheter',
+    validationMiddleware.validate([
+        param('id').isInt(),
+        body('info_acheteur').optional().isObject()
+    ]),
+    ServiceTransportController.acheter.bind(ServiceTransportController)
+);
+
+/**
+ * GET /api/v1/transport/mes-achats
+ * Récupérer les achats de services de l'utilisateur connecté
+ * Query: page=1, limit=20, est_actif
+ * Auth: Bearer <token>
+ * Réponse: { success, data: [achats], pagination }
+ */
+router.get('/mes-achats',
+    ServiceTransportController.getMesAchats.bind(ServiceTransportController)
 );
 
 module.exports = router;

@@ -243,6 +243,31 @@ router.post('/verify',
     AuthController.verifyCode.bind(AuthController)
 );
 
+router.post('/verify-MDP', 
+    verifyCodeLimiter, 
+    validationMiddleware.validate([
+        body('email').optional().isEmail().normalizeEmail(),
+        body('code')
+            .notEmpty()
+            .isLength({ min: 6, max: 6 })
+            .isNumeric()
+            .withMessage('Le code doit être composé de 6 chiffres')
+    ]), AuthController.verifyCodeMDP.bind(AuthController));
+
+router.post('/modify-mdp-verification',
+    verifyCodeLimiter,
+    validationMiddleware.validate([
+        body('email').optional().isEmail().normalizeEmail(),
+        body('nouveau_mot_de_passe')
+            .isLength({ min: 8 })
+            .withMessage('Le nouveau mot de passe doit contenir au moins 8 caractères')
+            .matches(/^(?=.*[A-Za-z])(?=.*\d)/)
+            .withMessage('Le nouveau mot de passe doit contenir au moins une lettre et un chiffre')
+    ]),
+    AuthController.modifierMotDePasseViaVerificationOTP.bind(AuthController)
+);
+
+
 /**
  * @swagger
  * /authentification/resend-code:
@@ -290,19 +315,13 @@ router.post('/verify',
  */
 router.post('/resend-code',
     passwordResetLimiter,
-    validationMiddleware.validate([
-        body('email').optional().isEmail().normalizeEmail(),
-        body('telephone').optional().matches(/^[0-9+\-\s]+$/),
-        body().custom((value, { req }) => {
-            if (!req.body.email && !req.body.telephone) {
-                throw new Error('Email ou téléphone requis');
-            }
-            return true;
-        })
-    ]),
     AuthController.resendVerificationCode.bind(AuthController)
 );
 
+router.post('/send-code',
+    passwordResetLimiter,
+    AuthController.sendVerificationCode.bind(AuthController)
+);
 // ==================== II. CONNEXION ET SESSIONS ====================
 
 /**

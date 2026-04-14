@@ -1184,6 +1184,37 @@ class RedisClient {
             return fallbackValue;
         }
     }
+
+    // Ajoutez cette méthode pour les opérations en pipeline
+    async mgetWithPipeline(keys) {
+        const pipeline = this.client.pipeline();
+        for (const key of keys) {
+            pipeline.get(key);
+        }
+        const results = await pipeline.exec();
+        return results.map(([err, result]) => {
+            if (err || !result) return null;
+            try {
+                return JSON.parse(result);
+            } catch {
+                return result;
+            }
+        });
+    }
+
+    // Ajoutez cette méthode pour le cache avec fallback
+    async getOrSet(key, ttl, fetcher) {
+        const cached = await this.get(key);
+        if (cached !== null) {
+            return cached;
+        }
+        
+        const fresh = await fetcher();
+        if (fresh !== null) {
+            await this.setex(key, ttl, fresh);
+        }
+        return fresh;
+    }
 }
 
 // Exporter une instance unique

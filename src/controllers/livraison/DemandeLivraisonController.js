@@ -270,6 +270,311 @@ class DemandeLivraisonController {
             next(error);
         }
     }
+ 
+    /**
+     * Récupérer les livraisons de l'utilisateur connecté
+     * @route GET /api/v1/livraison/mes-demandes
+     */
+    async findMyLivraisons(req, res, next) {
+        try {
+            const userId = req.user?.id;
+            const userRole = req.user?.compte_role;
+
+            if (!userId) {
+                throw new ValidationError('Utilisateur non authentifié');
+            }
+
+            const {
+                page = 1,
+                limit = 20,
+                statut_livraison,
+                commande_type,
+                date_debut,
+                date_fin,
+                role = 'client'  // 'client' ou 'livreur'
+            } = req.query;
+
+            const offset = (parseInt(page) - 1) * parseInt(limit);
+
+            // Récupérer l'ID du livreur si l'utilisateur est livreur
+            let livreurId = null;
+            
+            // Vérifier si l'utilisateur est un livreur (via la table LIVREURS)
+            const livreurCheck = await db.query(
+                `SELECT id FROM LIVREURS WHERE compte_id = $1 AND est_actif = true`,
+                [userId]
+            );
+            const estLivreur = livreurCheck.rows.length > 0;
+            
+            if (role === 'livreur' && estLivreur) {
+                livreurId = livreurCheck.rows[0].id;
+            }
+
+            let query = `
+                SELECT 
+                    dl.id,
+                    dl.details_livraison,
+                    dl.est_effectue,
+                    dl.livreur_affecte,
+                    dl.commission,
+                    dl.commande_type,
+                    dl.commande_id,
+                    dl.statut_livraison,
+                    dl.date_creation,
+                    dl.date_mise_a_jour,
+                    dl.date_livraison_prevue,
+                    dl.date_livraison_effective,
+                    -- Infos du livreur via la table COMPTES
+                    c.nom_utilisateur_compte as livreur_nom,
+                    c.photo_profil_compte as livreur_photo,
+                    c.numero_de_telephone as livreur_telephone,
+                    -- Infos spécifiques au livreur
+                    l.note_moyenne as livreur_note,
+                    l.type_vehicule as livreur_vehicule,
+                    -- Informations de la commande
+                    CASE 
+                        WHEN dl.commande_type = 'RESTAURANT_FAST_FOOD' THEN (
+                            SELECT json_build_object(
+                                'id', cff.id,
+                                'reference', cff.reference_commande,
+                                'total', cff.prix_total_commande,
+                                'restaurant', e.nom_emplacement,
+                                'date_commande', cff.date_commande,
+                                'statut', cff.statut_commande
+                            )
+                            FROM COMMANDESEMPLACEMENTFASTFOOD cff
+                            LEFT JOIN EMPLACEMENTSRESTAURANTFASTFOOD e ON e.id = cff.id_restaurant_fast_food_emplacement
+                            WHERE cff.id = dl.commande_id
+                        )
+                        WHEN dl.commande_type = 'BOUTIQUE' THEN (
+                            SELECT json_build_object(
+                                'id', cb.id,
+                                'reference', cb.reference_commande,
+                                'total', cb.prix_total_commande,
+                                'boutique', b.nom_boutique,
+                                'date_commande', cb.date_commande,
+                                'statut', cb.statut_commande
+                            )
+                            FROM COMMANDESBOUTIQUES cb
+                            LEFT JOIN BOUTIQUES b ON b.id = cb.id_boutique
+                            WHERE cb.id = dl.commande_id
+                        )
+                    END as commande_details,
+                    COUNT(*) OVER() as total_count
+                FROM DEMANDES_LIVRAISON dl
+                LEFT JOIN LIVREURS l ON l.id = dl.livreur_affecte
+                LEFT JOIN COMPTES c ON c.id = l.compte_id
+                WHERE 1=1
+            `;
+
+            const params = [];
+            let paramIndex = 1;
+
+            // Filtrer selon le rôle demandé
+            if (role === 'livreur' && livreurId) {
+                // Mode livreur : voir ses livraisons assignées
+                query += ` AND dl.livreur_affecte = $${paramIndex}`;
+                params.push(livreurId);
+                paramIndex++;
+            } else {
+                // Mode client (par défaut) : voir ses commandes
+                query += ` AND EXISTS (
+                    SELECT 1 FROM COMMANDESEMPLACEMENTFASTFOOD cff 
+                    WHERE cff.id = dl.commande_id 
+                    AND dl.commande_type = 'RESTAURANT_FAST_FOOD' 
+                    AND cff.compte_id = $${paramIndex}
+                    UNION ALL
+                    SELECT 1 FROM COMMANDESBOUTIQUES cb 
+                    WHERE cb.id = dl.commande_id 
+                    AND dl.commande_type = 'BOUTIQUE' 
+                    AND cb.compte_id = $${paramIndex}
+                )`;
+                params.push(userId);
+                paramIndex++;
+            }
+
+            // Filtres optionnels
+            if (statut_livraison) {
+                query += ` AND dl.statut_livraison = $${paramIndex}`;
+                params.push(statut_livraison);
+                paramIndex++;
+            }
+
+            if (commande_type) {
+                query += ` AND dl.commande_type = $${paramIndex}`;
+                params.push(commande_type);
+                paramIndex++;
+            }
+
+            if (date_debut) {
+                query += ` AND dl.date_creation >= $${paramIndex}`;
+                params.push(date_debut);
+                paramIndex++;
+            }
+
+            if (date_fin) {
+                query += ` AND dl.date_creation <= $${paramIndex}`;
+                params.push(date_fin);
+                paramIndex++;
+            }
+
+            query += ` ORDER BY dl.date_creation DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+            params.push(parseInt(limit), offset);
+
+            const result = await db.query(query, params);
+            const total = result.rows[0]?.total_count || 0;
+
+            // Formater les données JSON
+            const livraisons = result.rows.map(row => ({
+                ...row,
+                commande_details: row.commande_details || null,
+                details_livraison: typeof row.details_livraison === 'string' 
+                    ? JSON.parse(row.details_livraison) 
+                    : row.details_livraison
+            }));
+
+            res.json({
+                success: true,
+                data: livraisons,
+                meta: {
+                    role_utilise: role === 'livreur' && livreurId ? 'livreur' : 'client',
+                    est_livreur: estLivreur,
+                    livreur_id: livreurId
+                },
+                pagination: {
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    total,
+                    pages: Math.ceil(total / limit)
+                }
+            });
+
+        } catch (error) {
+            console.error('Erreur findMyLivraisons:', error);
+            next(error);
+        }
+    }
+
+    /**
+     * Récupérer une livraison spécifique de l'utilisateur connecté
+     * @route GET /api/v1/livraison/mes-demandes/:id
+     */
+    async findMyLivraisonById(req, res, next) {
+        try {
+            const { id } = req.params;
+            const userId = req.user?.id;
+
+            if (!userId) {
+                throw new ValidationError('Utilisateur non authentifié');
+            }
+
+            // Récupérer le livreur_id si l'utilisateur est livreur
+            const livreurResult = await db.query(
+                `SELECT id FROM LIVREURS WHERE compte_id = $1 AND est_actif = true`,
+                [userId]
+            );
+            const livreurId = livreurResult.rows[0]?.id;
+
+            const result = await db.query(
+                `SELECT 
+                    dl.*,
+                    l.nom_livreur,
+                    l.prenom_livreur,
+                    l.photo_livreur,
+                    l.numero_telephone_livreur,
+                    l.note_moyenne as livreur_note,
+                    l.type_vehicule,
+                    l.plaque_immatriculation,
+                    json_build_object(
+                        'id', a.id,
+                        'ligne_1', a.ligne_1,
+                        'ligne_2', a.ligne_2,
+                        'ville', a.ville,
+                        'quartier', a.quartier,
+                        'coordonnees', ST_AsGeoJSON(a.coordonnees)
+                    ) as adresse_livraison,
+                    json_build_object(
+                        'id', a_dep.id,
+                        'ligne_1', a_dep.ligne_1,
+                        'ligne_2', a_dep.ligne_2,
+                        'ville', a_dep.ville
+                    ) as adresse_depart,
+                    CASE 
+                        WHEN dl.commande_type = 'RESTAURANT_FAST_FOOD' THEN (
+                            SELECT json_build_object(
+                                'id', c.id,
+                                'reference', c.reference_commande,
+                                'total', c.prix_total_commande,
+                                'statut', c.statut_commande,
+                                'restaurant', e.nom_emplacement,
+                                'date_commande', c.date_commande,
+                                'items', c.donnees_commande
+                            )
+                            FROM COMMANDESEMPLACEMENTFASTFOOD c
+                            LEFT JOIN EMPLACEMENTSRESTAURANTFASTFOOD e ON e.id = c.id_restaurant_fast_food_emplacement
+                            WHERE c.id = dl.commande_id
+                        )
+                        WHEN dl.commande_type = 'BOUTIQUE' THEN (
+                            SELECT json_build_object(
+                                'id', c.id,
+                                'reference', c.reference_commande,
+                                'total', c.prix_total_commande,
+                                'statut', c.statut_commande,
+                                'boutique', b.nom_boutique,
+                                'date_commande', c.date_commande,
+                                'items', c.donnees_commandes
+                            )
+                            FROM COMMANDESBOUTIQUES c
+                            LEFT JOIN BOUTIQUES b ON b.id = c.id_boutique
+                            WHERE c.id = dl.commande_id
+                        )
+                    END as commande_details
+                FROM DEMANDES_LIVRAISON dl
+                LEFT JOIN LIVREURS l ON l.id = dl.livreur_affecte
+                LEFT JOIN ADRESSES a ON a.id = dl.adresse_livraison_id
+                LEFT JOIN ADRESSES a_dep ON a_dep.id = dl.adresse_depart_id
+                WHERE dl.id = $1
+                AND (
+                    -- Client propriétaire de la commande
+                    EXISTS (
+                        SELECT 1 FROM COMMANDESEMPLACEMENTFASTFOOD cff 
+                        WHERE cff.id = dl.commande_id 
+                            AND dl.commande_type = 'RESTAURANT_FAST_FOOD' 
+                            AND cff.compte_id = $2
+                        UNION ALL
+                        SELECT 1 FROM COMMANDESBOUTIQUES cb 
+                        WHERE cb.id = dl.commande_id 
+                            AND dl.commande_type = 'BOUTIQUE' 
+                            AND cb.compte_id = $2
+                    )
+                    OR dl.livreur_affecte = $3  -- Livreur assigné
+                )`,
+                [id, userId, livreurId]
+            );
+
+            if (result.rows.length === 0) {
+                throw new NotFoundError('Livraison non trouvée ou accès non autorisé');
+            }
+
+            const livraison = result.rows[0];
+            
+            // Formater les données JSON
+            if (livraison.details_livraison && typeof livraison.details_livraison === 'string') {
+                livraison.details_livraison = JSON.parse(livraison.details_livraison);
+            }
+            if (livraison.adresse_livraison?.coordonnees) {
+                livraison.adresse_livraison.coordonnees = JSON.parse(livraison.adresse_livraison.coordonnees);
+            }
+
+            res.json({
+                success: true,
+                data: livraison
+            });
+
+        } catch (error) {
+            next(error);
+        }
+    }
 
     /**
      * Assigner un livreur à une demande
