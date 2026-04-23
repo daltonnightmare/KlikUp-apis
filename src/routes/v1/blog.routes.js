@@ -614,7 +614,7 @@ router.post('/articles/:articleId/partager',
     shareLimiter,
     validationMiddleware.validate([
         param('articleId').isInt(),
-        body('type_partage').isIn(['FACEBOOK', 'TWITTER', 'LINKEDIN', 'WHATSAPP', 'EMAIL', 'COPY_LINK'])
+        body('type_partage').isIn(['FACEBOOK', 'TWITTER', 'LINKEDIN', 'WHATSAPP', 'EMAIL', 'COPY_LINK', 'NATIVE_SHARE'])
     ]),
     PartageController.share.bind(PartageController)
 );

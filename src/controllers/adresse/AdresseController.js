@@ -5,7 +5,7 @@ const { ValidationError } = require('../../utils/errors/AppError');
 const GeoService = require('../../services/geo/GeoService');
 const AuditService = require('../../services/audit/AuditService');
 const CacheService = require('../../services/cache/CacheService');
-const { logInfo, logError, logDebug } = require('../../configuration/logger');
+const logger = require('../../configuration/logger');
 
 class AdresseController {
     /**
@@ -14,7 +14,7 @@ class AdresseController {
      * @access PRIVATE
      */
     async create(req, res, next) {
-        const client = await pool.connect();
+        const client = await pool.getClient();
         try {
             await client.query('BEGIN');
 
@@ -47,9 +47,9 @@ class AdresseController {
                 try {
                     const adresseComplete = `${ligne_1}, ${ville}, ${pays}`;
                     geom = await GeoService.geocode(adresseComplete);
-                    logDebug(`Adresse géocodée: ${adresseComplete} -> ${JSON.stringify(geom)}`);
+                    logger.debug(`Adresse géocodée: ${adresseComplete} -> ${JSON.stringify(geom)}`);
                 } catch (geoError) {
-                    logWarn('Échec du géocodage:', geoError);
+                    logger.warn('Échec du géocodage:', geoError);
                     // On continue sans coordonnées
                 }
             }
@@ -113,7 +113,7 @@ class AdresseController {
                 await CacheService.delPattern(`adresses:${entite_type}:${entite_id}:*`);
             }
 
-            logInfo(`Adresse créée: ${adresse.id} - ${ligne_1}, ${ville}`);
+            logger.info(`Adresse créée: ${adresse.id} - ${ligne_1}, ${ville}`);
 
             res.status(201).json({
                 status: 'success',
@@ -122,7 +122,7 @@ class AdresseController {
 
         } catch (error) {
             await client.query('ROLLBACK');
-            logError('Erreur création adresse:', error);
+            logger.error('Erreur création adresse:', error);
             next(error);
         } finally {
             client.release();
@@ -137,7 +137,7 @@ class AdresseController {
     async findById(req, res, next) {
         try {
             const { id } = req.params;
-
+            const client = await pool.getClient();
             // Vérification cache
             const cacheKey = `adresse:${id}`;
             const cached = await CacheService.get(cacheKey);
@@ -149,7 +149,7 @@ class AdresseController {
                 });
             }
 
-            const result = await pool.query(
+            const result = await client.query(
                 `SELECT 
                     a.*,
                     ST_AsGeoJSON(a.coordonnees) as coordonnees_geojson,
@@ -185,7 +185,7 @@ class AdresseController {
             });
 
         } catch (error) {
-            logError('Erreur récupération adresse:', error);
+            logger.error('Erreur récupération adresse:', error);
             next(error);
         }
     }
@@ -199,6 +199,7 @@ class AdresseController {
         try {
             const { type, id } = req.params;
             const { type_adresse, actif = true } = req.query;
+            const client = await pool.getClient();
 
             // Vérification cache
             const cacheKey = `adresses:${type}:${id}:${type_adresse || 'all'}`;
@@ -245,7 +246,7 @@ class AdresseController {
                 END,
                 ae.date_ajout DESC`;
 
-            const result = await pool.query(query, params);
+            const result = await client.query(query, params);
 
             // Trouver l'adresse principale
             const principale = result.rows.find(a => a.type_adresse === 'PRINCIPALE');
@@ -266,7 +267,7 @@ class AdresseController {
             });
 
         } catch (error) {
-            logError('Erreur récupération adresses entité:', error);
+            logger.error('Erreur récupération adresses entité:', error);
             next(error);
         }
     }
@@ -277,7 +278,7 @@ class AdresseController {
      * @access PRIVATE
      */
     async update(req, res, next) {
-        const client = await pool.connect();
+        const client = await pool.getClient();
         try {
             await client.query('BEGIN');
 
@@ -371,7 +372,7 @@ class AdresseController {
 
         } catch (error) {
             await client.query('ROLLBACK');
-            logError('Erreur mise à jour adresse:', error);
+            logger.error('Erreur mise à jour adresse:', error);
             next(error);
         } finally {
             client.release();
@@ -384,7 +385,7 @@ class AdresseController {
      * @access ADMINISTRATEUR_PLATEFORME, PROPRIETAIRE
      */
     async delete(req, res, next) {
-        const client = await pool.connect();
+        const client = await pool.getClient();
         try {
             await client.query('BEGIN');
 
@@ -422,7 +423,7 @@ class AdresseController {
             await CacheService.del(`adresse:${id}`);
             await CacheService.delPattern(`adresses:*`);
 
-            logInfo(`Adresse supprimée: ${id}`);
+            logger.info(`Adresse supprimée: ${id}`);
 
             res.json({
                 status: 'success',
@@ -431,7 +432,7 @@ class AdresseController {
 
         } catch (error) {
             await client.query('ROLLBACK');
-            logError('Erreur suppression adresse:', error);
+            logger.error('Erreur suppression adresse:', error);
             next(error);
         } finally {
             client.release();
@@ -444,7 +445,7 @@ class AdresseController {
      * @access PRIVATE
      */
     async linkToEntity(req, res, next) {
-        const client = await pool.connect();
+        const client = await pool.getClient();
         try {
             await client.query('BEGIN');
 
@@ -507,7 +508,7 @@ class AdresseController {
 
         } catch (error) {
             await client.query('ROLLBACK');
-            logError('Erreur liaison adresse:', error);
+            logger.error('Erreur liaison adresse:', error);
             next(error);
         } finally {
             client.release();
@@ -520,7 +521,7 @@ class AdresseController {
      * @access PRIVATE
      */
     async unlinkFromEntity(req, res, next) {
-        const client = await pool.connect();
+        const client = await pool.getClient();
         try {
             await client.query('BEGIN');
 
@@ -559,7 +560,7 @@ class AdresseController {
 
         } catch (error) {
             await client.query('ROLLBACK');
-            logError('Erreur déliaison adresse:', error);
+            logger.error('Erreur déliaison adresse:', error);
             next(error);
         } finally {
             client.release();
@@ -572,7 +573,7 @@ class AdresseController {
      * @access PRIVATE
      */
     async setAsPrincipal(req, res, next) {
-        const client = await pool.connect();
+        const client = await pool.getClient();
         try {
             await client.query('BEGIN');
 
@@ -593,7 +594,7 @@ class AdresseController {
 
         } catch (error) {
             await client.query('ROLLBACK');
-            logError('Erreur définition adresse principale:', error);
+            logger.error('Erreur définition adresse principale:', error);
             next(error);
         } finally {
             client.release();
@@ -606,7 +607,7 @@ class AdresseController {
      * @access ADMINISTRATEUR_PLATEFORME
      */
     async validate(req, res, next) {
-        const client = await pool.connect();
+        const client = await pool.getClient();
         try {
             await client.query('BEGIN');
 
@@ -649,7 +650,7 @@ class AdresseController {
 
         } catch (error) {
             await client.query('ROLLBACK');
-            logError('Erreur validation adresse:', error);
+            logger.error('Erreur validation adresse:', error);
             next(error);
         } finally {
             client.release();
@@ -740,11 +741,11 @@ class AdresseController {
 
             params.push(parseInt(limit), offset);
 
-            const result = await pool.query(query, params);
+            const result = await client.query(query, params);
 
             // Comptage
             let countQuery = `SELECT COUNT(*) FROM ADRESSES ${whereClause}`;
-            const countResult = await pool.query(countQuery, params.slice(0, -2));
+            const countResult = await client.query(countQuery, params.slice(0, -2));
             const total = parseInt(countResult.rows[0].count);
 
             res.json({
@@ -759,7 +760,7 @@ class AdresseController {
             });
 
         } catch (error) {
-            logError('Erreur recherche adresses:', error);
+            logger.error('Erreur recherche adresses:', error);
             next(error);
         }
     }

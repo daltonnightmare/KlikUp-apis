@@ -18,6 +18,7 @@ const EmplacementController = require('../../controllers/transport/EmplacementCo
 const TicketController = require('../../controllers/transport/TicketController');
 const ServiceTransportController = require('../../controllers/transport/ServiceController');
 
+
 // ==================== AUTHENTIFICATION GLOBALE ====================
 // Toutes les routes de transport nécessitent une authentification
 // Sauf les routes publiques spécifiées individuellement
@@ -644,10 +645,10 @@ router.delete('/services/:id',
  * Réponse: 201 { success, data: { achat, service }, message }
  */
 router.post('/services/:id/acheter',
-    validationMiddleware.validate([
+    /*validationMiddleware.validate([
         param('id').isInt(),
         body('info_acheteur').optional().isObject()
-    ]),
+    ]),*/
     ServiceTransportController.acheter.bind(ServiceTransportController)
 );
 

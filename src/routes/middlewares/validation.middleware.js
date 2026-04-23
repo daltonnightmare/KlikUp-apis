@@ -8,7 +8,13 @@ class ValidationMiddleware {
      * Valider les résultats de express-validator
      */
     validate(validations) {
+        
         return async (req, res, next) => {
+
+            if (['GET', 'DELETE'].includes(req.method)) {
+                // Valider les paramètres de requête pour GET et DELETE
+                return next();
+            }
             // Exécuter toutes les validations
             for (const validation of validations) {
                 const result = await validation.run(req);

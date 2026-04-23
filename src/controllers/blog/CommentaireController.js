@@ -9,7 +9,7 @@ class CommentaireController {
      * Ajouter un commentaire à un article
      * @route POST /api/v1/blog/articles/:articleId/commentaires
      */
-    async create(req, res, next) {
+    /*async create(req, res, next) {
         const client = await db.pool.connect();
         
         try {
@@ -121,8 +121,133 @@ class CommentaireController {
         } finally {
             client.release();
         }
-    }
+    }*/
+    /**
+     * Ajouter un commentaire à un article
+     * @route POST /api/v1/blog/articles/:articleId/commentaires
+     */
+    async create(req, res, next) {
+        const client = await db.pool.connect();
+        
+        try {
+            await client.query('BEGIN');
+            
+            const { articleId } = req.params;
+            const {
+                contenu_commentaire,
+                commentaire_parent_id,
+                est_anonyme = false,
+                pseudo_anonyme,
+                note
+            } = req.body;
 
+            // Validation
+            if (!contenu_commentaire) {
+                throw new ValidationError('Le contenu du commentaire est requis');
+            }
+
+            // Vérifier que l'article existe et accepte les commentaires
+            const article = await client.query(
+                `SELECT * FROM ARTICLES_BLOG_PLATEFORME 
+                WHERE id = $1 AND est_commentaire_actif = true`,
+                [articleId]
+            );
+
+            if (article.rows.length === 0) {
+                throw new NotFoundError('Article non trouvé ou commentaires désactivés');
+            }
+
+            // Vérifier le commentaire parent si spécifié
+            if (commentaire_parent_id) {
+                const parent = await client.query(
+                    'SELECT id FROM COMMENTAIRES WHERE id = $1 AND article_id = $2',
+                    [commentaire_parent_id, articleId]
+                );
+                if (parent.rows.length === 0) {
+                    throw new ValidationError('Commentaire parent invalide');
+                }
+            }
+
+            // Déterminer le statut du commentaire
+            // Les rôles suivants sont auto-approuvés
+            const autoApproveRoles = [
+                'ADMINISTRATEUR_PLATEFORME',
+                'STAFF_PLATEFORME',
+                'BLOGUEUR_PLATEFORME',
+                'ADMINISTRATEUR_COMPAGNIE',
+                'STAFF_COMPAGNIE'
+            ];
+            const statut = 'APPROUVE';
+
+            // Création du commentaire
+            const result = await client.query(
+                `INSERT INTO COMMENTAIRES (
+                    contenu_commentaire, article_id, commentaire_parent_id,
+                    auteur_id, est_anonyme, pseudo_anonyme, note, statut,
+                    adresse_ip, user_agent
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                RETURNING *`,
+                [
+                    contenu_commentaire, articleId, commentaire_parent_id,
+                    req.user.id, est_anonyme, pseudo_anonyme, note,
+                    statut,
+                    req.ip,
+                    req.headers['user-agent']
+                ]
+            );
+
+            const commentaire = result.rows[0];
+
+            // Mettre à jour le compteur de commentaires de l'article
+            await client.query(
+                'UPDATE ARTICLES_BLOG_PLATEFORME SET nombre_commentaires = nombre_commentaires + 1 WHERE id = $1',
+                [articleId]
+            );
+
+            // Mettre à jour le compteur de réponses si c'est une réponse
+            if (commentaire_parent_id) {
+                await client.query(
+                    'UPDATE COMMENTAIRES SET nombre_reponses = nombre_reponses + 1 WHERE id = $1',
+                    [commentaire_parent_id]
+                );
+            }
+
+            // Journalisation
+            await AuditService.log({
+                action: 'CREATE',
+                ressource_type: 'COMMENTAIRE',
+                ressource_id: commentaire.id,
+                utilisateur_id: req.user.id,
+                donnees_apres: commentaire
+            });
+
+            // Notification à l'auteur de l'article
+            /*if (article.rows[0].auteur_id !== req.user.id) {
+                await NotificationService.send({
+                    destinataire_id: article.rows[0].auteur_id,
+                    type: 'NOUVEAU_COMMENTAIRE',
+                    titre: 'Nouveau commentaire sur votre article',
+                    corps: `${est_anonyme ? 'Un utilisateur' : req.user.nom_utilisateur_compte} a commenté votre article`,
+                    entite_source_type: 'COMMENTAIRE',
+                    entite_source_id: commentaire.id
+                });
+            }*/
+
+            await client.query('COMMIT');
+
+            res.status(201).json({
+                success: true,
+                data: commentaire,
+                message: 'Commentaire ajouté avec succès'
+            });
+
+        } catch (error) {
+            await client.query('ROLLBACK');
+            next(error);
+        } finally {
+            client.release();
+        }
+    }
     /**
      * Mettre à jour un commentaire
      * @route PUT /api/v1/blog/commentaires/:id
@@ -265,7 +390,7 @@ class CommentaireController {
      * Récupérer les commentaires d'un article
      * @route GET /api/v1/blog/articles/:articleId/commentaires
      */
-    async findByArticle(req, res, next) {
+    /*async findByArticle(req, res, next) {
         try {
             const { articleId } = req.params;
             const { page = 1, limit = 50, tri = 'recent' } = req.query;
@@ -359,6 +484,98 @@ class CommentaireController {
         } catch (error) {
             next(error);
         }
+    }*/
+    async findByArticle(req, res, next) {
+        try {
+            const { articleId } = req.params;
+            const { page = 1, limit = 50, tri = 'recent' } = req.query;
+
+            const offset = (page - 1) * limit;
+            const canSeePending = req.user && 
+                ['ADMINISTRATEUR_PLATEFORME', 'STAFF_PLATEFORME'].includes(req.user.compte_role);
+
+            // Récupérer les commentaires racines
+            const rootCommentsQuery = `
+                SELECT c.*,
+                    u.nom_utilisateur_compte as auteur_nom,
+                    u.photo_profil_compte as auteur_photo,
+                    COUNT(l.id) FILTER (WHERE l.type_like = 'LIKE') as nombre_likes,
+                    COUNT(l.id) FILTER (WHERE l.type_like = 'DISLIKE') as nombre_dislikes,
+                    CASE WHEN $2 THEN 
+                        EXISTS(SELECT 1 FROM LIKES_COMMENTAIRES 
+                                WHERE commentaire_id = c.id AND compte_id = $3)
+                    ELSE false END as user_liked,
+                    COUNT(*) OVER() as total_count
+                FROM COMMENTAIRES c
+                LEFT JOIN COMPTES u ON u.id = c.auteur_id
+                LEFT JOIN LIKES_COMMENTAIRES l ON l.commentaire_id = c.id
+                WHERE c.article_id = $1
+                AND c.commentaire_parent_id IS NULL
+                ${!canSeePending ? "AND c.statut = 'APPROUVE'" : ''}
+                GROUP BY c.id, u.nom_utilisateur_compte, u.photo_profil_compte
+                ORDER BY c.date_creation DESC
+                LIMIT $4 OFFSET $5
+            `;
+
+            const result = await db.query(rootCommentsQuery, [
+                articleId, 
+                !!req.user, 
+                req.user?.id, 
+                parseInt(limit), 
+                offset
+            ]);
+
+            // Fonction récursive pour récupérer toutes les réponses
+            const getRepliesRecursively = async (parentId) => {
+                const replies = await db.query(
+                    `SELECT c.*,
+                            u.nom_utilisateur_compte as auteur_nom,
+                            u.photo_profil_compte as auteur_photo,
+                            COUNT(l.id) FILTER (WHERE l.type_like = 'LIKE') as nombre_likes,
+                            COUNT(l.id) FILTER (WHERE l.type_like = 'DISLIKE') as nombre_dislikes,
+                            CASE WHEN $2 THEN 
+                                EXISTS(SELECT 1 FROM LIKES_COMMENTAIRES 
+                                    WHERE commentaire_id = c.id AND compte_id = $3)
+                            ELSE false END as user_liked
+                    FROM COMMENTAIRES c
+                    LEFT JOIN COMPTES u ON u.id = c.auteur_id
+                    LEFT JOIN LIKES_COMMENTAIRES l ON l.commentaire_id = c.id
+                    WHERE c.commentaire_parent_id = $1
+                    ${!canSeePending ? "AND c.statut = 'APPROUVE'" : ''}
+                    GROUP BY c.id, u.nom_utilisateur_compte, u.photo_profil_compte
+                    ORDER BY c.date_creation ASC`,
+                    [parentId, !!req.user, req.user?.id]
+                );
+
+                for (const reply of replies.rows) {
+                    reply.reponses = await getRepliesRecursively(reply.id);
+                }
+
+                return replies.rows;
+            };
+
+            // Récupérer toutes les réponses récursivement
+            for (const comment of result.rows) {
+                comment.reponses = await getRepliesRecursively(comment.id);
+            }
+
+            const total = result.rows[0]?.total_count || 0;
+
+            res.json({
+                success: true,
+                data: result.rows,
+                pagination: {
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    total: parseInt(total),
+                    pages: Math.ceil(parseInt(total) / parseInt(limit))
+                }
+            });
+
+        } catch (error) {
+            console.error('Erreur dans findByArticle:', error);
+            next(error);
+        }
     }
 
     /**
@@ -393,9 +610,9 @@ class CommentaireController {
             // Créer le signalement
             const result = await db.query(
                 `INSERT INTO SIGNALEMENTS_COMMENTAIRES (
-                    commentaire_id, compte_id, motif, description, adresse_ip
-                ) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-                [id, req.user.id, motif, description, req.ip]
+                    commentaire_id, compte_id, motif, description
+                ) VALUES ($1, $2, $3, $4) RETURNING *`,
+                [id, req.user.id, motif, description]
             );
 
             // Incrémenter le compteur de signalements du commentaire

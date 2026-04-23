@@ -1,4 +1,6 @@
+// src/services/file/FileService.js
 const fs = require('fs').promises;
+const fsSync = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const mime = require('mime-types');
@@ -53,6 +55,40 @@ class FileService {
   }
 
   /**
+   * Extraire le buffer d'un fichier multer
+   */
+  async extractFileBuffer(file) {
+    // Si le fichier a déjà un buffer (memoryStorage)
+    if (file.buffer) {
+      return {
+        buffer: file.buffer,
+        originalname: file.originalname,
+        mimetype: file.mimetype,
+        size: file.size
+      };
+    }
+    
+    // Si le fichier a un chemin (diskStorage)
+    if (file.path) {
+      const buffer = await fs.readFile(file.path);
+      // Supprimer le fichier temporaire après lecture
+      try {
+        await fs.unlink(file.path);
+      } catch (e) {
+        // Ignorer l'erreur de suppression
+      }
+      return {
+        buffer: buffer,
+        originalname: file.originalname,
+        mimetype: file.mimetype,
+        size: buffer.length
+      };
+    }
+    
+    throw new Error('Format de fichier non supporté');
+  }
+
+  /**
    * Sauvegarder un fichier
    */
   async saveFile(file, subDir = 'temp', options = {}) {
@@ -63,32 +99,35 @@ class FileService {
         allowedTypes = null
       } = options;
 
+      // Extraire le buffer du fichier multer
+      const fileData = await this.extractFileBuffer(file);
+
       // Vérifier la taille
-      if (file.size > maxSize) {
+      if (fileData.size > maxSize) {
         throw new Error(`Fichier trop volumineux. Maximum: ${maxSize / 1024 / 1024}MB`);
       }
 
       // Vérifier le type MIME
-      if (allowedTypes && !allowedTypes.includes(file.mimetype)) {
-        throw new Error(`Type de fichier non autorisé: ${file.mimetype}`);
+      if (allowedTypes && !allowedTypes.includes(fileData.mimetype)) {
+        throw new Error(`Type de fichier non autorisé: ${fileData.mimetype}`);
       }
 
       // Générer le nom du fichier
-      const fileName = this.generateFileName(file.originalname, prefix);
+      const fileName = this.generateFileName(fileData.originalname, prefix);
       const filePath = path.join(this.uploadDir, subDir, fileName);
       const relativePath = path.join(subDir, fileName);
 
       // Sauvegarder le fichier
-      await fs.writeFile(filePath, file.buffer);
+      await fs.writeFile(filePath, fileData.buffer);
 
       // Retourner les informations du fichier
       return {
-        originalName: file.originalname,
-        fileName,
+        originalName: fileData.originalname,
+        fileName: fileName,
         filePath: relativePath,
-        size: file.size,
-        mimeType: file.mimetype,
-        url: `${this.baseUrl}/uploads/${relativePath}`
+        size: fileData.size,
+        mimeType: fileData.mimetype,
+        url: `${this.baseUrl}/uploads/${relativePath.replace(/\\/g, '/')}`
       };
     } catch (error) {
       console.error('Erreur sauvegarde fichier:', error);
@@ -110,53 +149,90 @@ class FileService {
     } = options;
 
     try {
-      // Sauvegarder l'image originale
-      const fileInfo = await this.saveFile(file, subDir, {
-        prefix,
-        maxSize: Constants.CONFIG.UPLOAD.MAX_IMAGE_SIZE,
-        allowedTypes: Constants.CONFIG.UPLOAD.ALLOWED_IMAGES
-      });
+      // Extraire le buffer du fichier multer
+      const fileData = await this.extractFileBuffer(file);
+
+      // Vérifier le type MIME
+      const allowedImages = Constants.CONFIG.UPLOAD.ALLOWED_IMAGES || 
+        ['image/jpeg', 'image/png', 'image/jpg', 'image/gif', 'image/webp'];
+      
+      if (!allowedImages.includes(fileData.mimetype)) {
+        throw new Error(`Type d'image non autorisé: ${fileData.mimetype}`);
+      }
+
+      // Vérifier la taille
+      const maxImageSize = Constants.CONFIG.UPLOAD.MAX_IMAGE_SIZE || 5 * 1024 * 1024;
+      if (fileData.size > maxImageSize) {
+        throw new Error(`Image trop volumineuse. Maximum: ${maxImageSize / 1024 / 1024}MB`);
+      }
+
+      // Générer le nom du fichier
+      const fileName = this.generateFileName(fileData.originalname, prefix);
+      const filePath = path.join(this.uploadDir, subDir, fileName);
+      const relativePath = path.join(subDir, fileName);
 
       // Optimiser l'image
-      const imagePath = path.join(this.uploadDir, fileInfo.filePath);
-      const imageBuffer = await fs.readFile(imagePath);
+      let imageBuffer = fileData.buffer;
       
-      const optimized = await sharp(imageBuffer)
-        .resize(maxWidth, maxHeight, { fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality, progressive: true })
-        .toBuffer();
+      try {
+        const optimized = await sharp(imageBuffer)
+          .resize(maxWidth, maxHeight, { fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality, progressive: true })
+          .toBuffer();
+        imageBuffer = optimized;
+      } catch (sharpError) {
+        console.warn('Erreur sharp, sauvegarde originale:', sharpError.message);
+        // Conserver l'image originale si sharp échoue
+      }
 
-      await fs.writeFile(imagePath, optimized);
+      // Sauvegarder l'image
+      await fs.writeFile(filePath, imageBuffer);
 
       // Générer une vignette si demandé
       let thumbnail = null;
       if (generateThumbnail) {
-        const thumbnailName = `thumb-${fileInfo.fileName}`;
-        const thumbnailPath = path.join(this.uploadDir, subDir, thumbnailName);
-        const thumbnailRelativePath = path.join(subDir, thumbnailName);
+        try {
+          const thumbnailName = `thumb-${fileName}`;
+          const thumbnailPath = path.join(this.uploadDir, subDir, thumbnailName);
+          const thumbnailRelativePath = path.join(subDir, thumbnailName);
 
-        const thumbBuffer = await sharp(imageBuffer)
-          .resize(thumbnailSize, thumbnailSize, { fit: 'cover' })
-          .jpeg({ quality: 70 })
-          .toBuffer();
+          const thumbBuffer = await sharp(fileData.buffer)
+            .resize(thumbnailSize, thumbnailSize, { fit: 'cover' })
+            .jpeg({ quality: 70 })
+            .toBuffer();
 
-        await fs.writeFile(thumbnailPath, thumbBuffer);
+          await fs.writeFile(thumbnailPath, thumbBuffer);
 
-        thumbnail = {
-          fileName: thumbnailName,
-          filePath: thumbnailRelativePath,
-          url: `${this.baseUrl}/uploads/${thumbnailRelativePath}`
-        };
+          thumbnail = {
+            fileName: thumbnailName,
+            filePath: thumbnailRelativePath,
+            url: `${this.baseUrl}/uploads/${thumbnailRelativePath.replace(/\\/g, '/')}`
+          };
+        } catch (thumbError) {
+          console.warn('Erreur génération vignette:', thumbError.message);
+        }
       }
 
       // Obtenir les dimensions
-      const metadata = await sharp(imageBuffer).metadata();
+      let width = null, height = null;
+      try {
+        const metadata = await sharp(fileData.buffer).metadata();
+        width = metadata.width;
+        height = metadata.height;
+      } catch (metaError) {
+        console.warn('Erreur lecture métadonnées:', metaError.message);
+      }
 
       return {
-        ...fileInfo,
-        width: metadata.width,
-        height: metadata.height,
-        thumbnail
+        originalName: fileData.originalname,
+        fileName: fileName,
+        filePath: relativePath,
+        size: imageBuffer.length,
+        mimeType: fileData.mimetype,
+        url: `${this.baseUrl}/uploads/${relativePath.replace(/\\/g, '/')}`,
+        width: width,
+        height: height,
+        thumbnail: thumbnail
       };
     } catch (error) {
       console.error('Erreur sauvegarde image:', error);
@@ -171,6 +247,17 @@ class FileService {
     try {
       const fullPath = path.join(this.uploadDir, filePath);
       await fs.unlink(fullPath);
+      
+      // Supprimer également la vignette si elle existe
+      const dir = path.dirname(filePath);
+      const basename = path.basename(filePath);
+      const thumbPath = path.join(this.uploadDir, dir, `thumb-${basename}`);
+      try {
+        await fs.unlink(thumbPath);
+      } catch (e) {
+        // Ignorer si la vignette n'existe pas
+      }
+      
       return true;
     } catch (error) {
       console.error('Erreur suppression fichier:', error);
@@ -204,7 +291,7 @@ class FileService {
         created: stats.birthtime,
         modified: stats.mtime,
         mimeType: mime.lookup(filePath) || 'application/octet-stream',
-        url: `${this.baseUrl}/uploads/${filePath}`
+        url: `${this.baseUrl}/uploads/${filePath.replace(/\\/g, '/')}`
       };
     } catch (error) {
       console.error('Erreur info fichier:', error);
@@ -249,7 +336,7 @@ class FileService {
   /**
    * Nettoyer les fichiers temporaires
    */
-  async cleanTempFiles(maxAge = 24 * 60 * 60 * 1000) { // 24h par défaut
+  async cleanTempFiles(maxAge = 24 * 60 * 60 * 1000) {
     const tempDir = path.join(this.uploadDir, 'temp');
     
     try {

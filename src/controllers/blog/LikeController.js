@@ -102,7 +102,7 @@ class LikeController {
                 action = 'added';
                 
                 // Notification à l'auteur (seulement pour les likes, pas pour les dislikes)
-                if (type_like === 'LIKE' && article.rows[0].auteur_id !== req.user.id) {
+                /*if (type_like === 'LIKE' && article.rows[0].auteur_id !== req.user.id) {
                     await NotificationService.send({
                         destinataire_id: article.rows[0].auteur_id,
                         type: 'LIKE_ARTICLE',
@@ -111,7 +111,7 @@ class LikeController {
                         entite_source_type: 'ARTICLE_BLOG',
                         entite_source_id: articleId
                     });
-                }
+                }*/
             }
 
             // Récupérer les compteurs mis à jour

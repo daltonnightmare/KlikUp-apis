@@ -784,4 +784,4 @@ class ServiceTransportController {
     }
 }
 
-module.exports = new ServiceTransportController();
+module.exports = ServiceTransportController;

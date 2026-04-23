@@ -2694,3 +2694,10 @@ CREATE INDEX idx_livreurs_zone ON LIVREURS USING GIST(zone_travail_principale);
 CREATE TRIGGER trg_livreurs_maj
     BEFORE UPDATE ON LIVREURS
     FOR EACH ROW EXECUTE FUNCTION fn_update_date_mise_a_jour();
+
+
+ALTER TABLE COMPTES 
+ADD COLUMN IF NOT EXISTS two_factor_secret VARCHAR(255),
+ADD COLUMN IF NOT EXISTS two_factor_temp_secret VARCHAR(255),
+ADD COLUMN IF NOT EXISTS two_factor_actif BOOLEAN DEFAULT FALSE,
+ADD COLUMN IF NOT EXISTS two_factor_backup_codes JSONB DEFAULT '[]'::jsonb;

@@ -1275,45 +1275,157 @@ class ArticleController {
     /**
      * Récupérer les commentaires d'un article
      */
-    async getArticleComments(articleId, user) {
-        const comments = await db.query(
-            `SELECT c.*,
+    /*async getArticleComments(articleId, user) {
+        try {
+            // Récupérer les commentaires principaux (sans parent)
+            const comments = await db.query(
+                `SELECT 
+                    c.id,
+                    c.contenu_commentaire,
+                    c.date_creation,
+                    c.note,
+                    c.nombre_likes,
+                    c.nombre_reponses,
+                    u.id as auteur_id,
                     u.nom_utilisateur_compte as auteur_nom,
                     u.photo_profil_compte as auteur_photo,
-                    COUNT(l.id) FILTER (WHERE l.type_like = 'LIKE') as likes,
-                    COUNT(l.id) FILTER (WHERE l.type_like = 'DISLIKE') as dislikes,
-                    EXISTS(SELECT 1 FROM LIKES_COMMENTAIRES 
-                          WHERE commentaire_id = c.id AND compte_id = $2) as user_liked
-             FROM COMMENTAIRES c
-             LEFT JOIN COMPTES u ON u.id = c.auteur_id
-             LEFT JOIN LIKES_COMMENTAIRES l ON l.commentaire_id = c.id
-             WHERE c.article_id = $1
-               AND c.statut = 'APPROUVE'
-               AND c.commentaire_parent_id IS NULL
-             GROUP BY c.id, u.nom_utilisateur_compte, u.photo_profil_compte
-             ORDER BY c.date_creation DESC`,
-            [articleId, user?.id]
-        );
+                    CASE WHEN $2::int IS NOT NULL THEN 
+                        EXISTS(SELECT 1 FROM LIKES_COMMENTAIRES 
+                            WHERE commentaire_id = c.id AND compte_id = $2)
+                    ELSE false END as user_liked
+                FROM COMMENTAIRES c
+                LEFT JOIN COMPTES u ON u.id = c.auteur_id
+                WHERE c.article_id = $1
+                AND c.statut = 'APPROUVE'
+                AND c.commentaire_parent_id IS NULL
+                ORDER BY c.date_creation ASC
+                LIMIT 50`,
+                [articleId, user?.id || null]
+            );
 
-        // Récupérer les réponses pour chaque commentaire
-        for (const comment of comments.rows) {
-            const replies = await db.query(
-                `SELECT c.*,
+            // Récupérer les réponses pour chaque commentaire
+            for (const comment of comments.rows) {
+                const replies = await db.query(
+                    `SELECT 
+                        c.id,
+                        c.contenu_commentaire,
+                        c.date_creation,
+                        u.id as auteur_id,
                         u.nom_utilisateur_compte as auteur_nom,
                         u.photo_profil_compte as auteur_photo
-                 FROM COMMENTAIRES c
-                 LEFT JOIN COMPTES u ON u.id = c.auteur_id
-                 WHERE c.commentaire_parent_id = $1
-                   AND c.statut = 'APPROUVE'
-                 ORDER BY c.date_creation ASC`,
-                [comment.id]
-            );
-            comment.reponses = replies.rows;
+                    FROM COMMENTAIRES c
+                    LEFT JOIN COMPTES u ON u.id = c.auteur_id
+                    WHERE c.commentaire_parent_id = $1
+                    AND c.statut = 'APPROUVE'
+                    ORDER BY c.date_creation ASC`,
+                    [comment.id]
+                );
+                comment.reponses = replies.rows;
+                comment.nombre_reponses = replies.rows.length;
+            }
+
+            return comments.rows;
+        } catch (error) {
+            console.error('Erreur récupération commentaires:', error);
+            return [];
         }
+    }*/
+    async getArticleComments(articleId, user) {
+        try {
+            // Requête récursive pour construire l'arbre directement en SQL
+            const result = await db.query(
+                `WITH RECURSIVE comment_tree AS (
+                    -- Sélectionner les commentaires racines
+                    SELECT 
+                        c.id,
+                        c.contenu_commentaire,
+                        c.date_creation,
+                        c.note,
+                        c.nombre_likes,
+                        c.nombre_reponses,
+                        c.commentaire_parent_id,
+                        u.id as auteur_id,
+                        u.nom_utilisateur_compte as auteur_nom,
+                        u.photo_profil_compte as auteur_photo,
+                        0 as niveau,
+                        ARRAY[c.id] as chemin,
+                        CASE WHEN $2::int IS NOT NULL THEN 
+                            EXISTS(SELECT 1 FROM LIKES_COMMENTAIRES 
+                                WHERE commentaire_id = c.id AND compte_id = $2)
+                        ELSE false END as user_liked
+                    FROM COMMENTAIRES c
+                    LEFT JOIN COMPTES u ON u.id = c.auteur_id
+                    WHERE c.article_id = $1
+                        AND c.statut = 'APPROUVE'
+                        AND c.commentaire_parent_id IS NULL
+                    
+                    UNION ALL
+                    
+                    -- Sélectionner les enfants récursivement
+                    SELECT 
+                        c.id,
+                        c.contenu_commentaire,
+                        c.date_creation,
+                        c.note,
+                        c.nombre_likes,
+                        c.nombre_reponses,
+                        c.commentaire_parent_id,
+                        u.id as auteur_id,
+                        u.nom_utilisateur_compte as auteur_nom,
+                        u.photo_profil_compte as auteur_photo,
+                        ct.niveau + 1,
+                        ct.chemin || c.id,
+                        CASE WHEN $2::int IS NOT NULL THEN 
+                            EXISTS(SELECT 1 FROM LIKES_COMMENTAIRES 
+                                WHERE commentaire_id = c.id AND compte_id = $2)
+                        ELSE false END as user_liked
+                    FROM COMMENTAIRES c
+                    LEFT JOIN COMPTES u ON u.id = c.auteur_id
+                    INNER JOIN comment_tree ct ON ct.id = c.commentaire_parent_id
+                    WHERE c.article_id = $1
+                        AND c.statut = 'APPROUVE'
+                )
+                SELECT * FROM comment_tree
+                ORDER BY chemin`,
+                [articleId, user?.id || null]
+            );
 
-        return comments.rows;
+            if (result.rows.length === 0) {
+                return [];
+            }
+
+            // Construire l'arbre à partir des résultats plats
+            const commentMap = new Map();
+            const rootComments = [];
+
+            for (const comment of result.rows) {
+                commentMap.set(comment.id, {
+                    ...comment,
+                    reponses: []
+                });
+            }
+
+            for (const comment of result.rows) {
+                const commentWithReplies = commentMap.get(comment.id);
+                
+                if (comment.commentaire_parent_id === null) {
+                    rootComments.push(commentWithReplies);
+                } else {
+                    const parent = commentMap.get(comment.commentaire_parent_id);
+                    if (parent) {
+                        parent.reponses.push(commentWithReplies);
+                    }
+                }
+            }
+
+            return rootComments;
+
+        } catch (error) {
+            console.error('Erreur récupération commentaires:', error);
+            return [];
+        }
     }
-
+    
     /**
      * Récupérer les articles similaires
      */

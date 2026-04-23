@@ -237,7 +237,7 @@ class MessageController {
 
             // Marquer les messages comme lus
             if (result.rows.length > 0) {
-                await this.markAsRead(conversationId, req.user.id);
+                await this._markMessagesAsRead(conversationId, req.user.id);
             }
 
             // Grouper les messages par date
@@ -364,10 +364,11 @@ class MessageController {
         try {
             const { conversationId } = req.params;
 
-            await db.query(
+            /*await db.query(
                 `SELECT marquer_messages_comme_lus($1, $2)`,
                 [conversationId, req.user.id]
-            );
+            );*/
+            await this._markMessagesAsRead(conversationId, req.user.id)
 
             res.json({
                 success: true,
@@ -569,6 +570,58 @@ class MessageController {
         }
         
         return groups;
+    }
+
+    /**
+     * MÉTHODE PRIVÉE: Marquer les messages comme lus
+     * @param {number} conversationId - ID de la conversation
+     * @param {number} userId - ID de l'utilisateur
+     */
+    async _markMessagesAsRead(conversationId, userId) {
+        try {
+            // Mettre à jour le statut des messages
+            await db.query(
+                `UPDATE MESSAGES m
+                 SET statut = 'LU'
+                 FROM PARTICIPANTS_CONVERSATION pc
+                 WHERE m.conversation_id = $1
+                   AND m.expediteur_id != $2
+                   AND m.statut != 'LU'
+                   AND pc.conversation_id = m.conversation_id
+                   AND pc.compte_id = $2`,
+                [conversationId, userId]
+            );
+
+            // Mettre à jour les messages non lus du participant
+            await db.query(
+                `UPDATE PARTICIPANTS_CONVERSATION
+                 SET messages_non_lus = 0,
+                     date_derniere_lecture = NOW(),
+                     dernier_message_lu_id = (
+                         SELECT id FROM MESSAGES 
+                         WHERE conversation_id = $1 
+                         ORDER BY date_envoi DESC 
+                         LIMIT 1
+                     )
+                 WHERE conversation_id = $1 AND compte_id = $2`,
+                [conversationId, userId]
+            );
+
+            // Appeler la fonction PostgreSQL si elle existe
+            try {
+                await db.query(
+                    `SELECT marquer_messages_comme_lus($1, $2)`,
+                    [conversationId, userId]
+                );
+            } catch (e) {
+                // La fonction n'existe pas, ignorer
+                console.log('Fonction marquer_messages_comme_lus non disponible');
+            }
+
+        } catch (error) {
+            console.error('Erreur _markMessagesAsRead:', error);
+            throw error;
+        }
     }
 }
 

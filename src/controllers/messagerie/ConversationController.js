@@ -228,7 +228,17 @@ class ConversationController {
                 
                 // Parser l'aperçu des participants
                 if (conv.apercu_participants) {
-                    conv.apercu_participants = JSON.parse(conv.apercu_participants);
+                    // Vérifier si c'est une chaîne avant de parser
+                    if (typeof conv.apercu_participants === 'string') {
+                        try {
+                            conv.apercu_participants = JSON.parse(conv.apercu_participants);
+                        } catch (e) {
+                            console.error('Erreur parsing apercu_participants:', e);
+                            conv.apercu_participants = [];
+                        }
+                    }
+                    // Si c'est déjà un tableau ou un objet, on le garde tel quel
+                    // Le driver PostgreSQL retourne déjà un objet parsé pour json_agg
                 }
 
                 // Pour les conversations DIRECT, déterminer l'autre participant
@@ -571,7 +581,7 @@ class ConversationController {
     /**
      * Récupérer les détails complets d'une conversation
      */
-    async getConversationDetails(conversationId, userId) {
+    /*async getConversationDetails(conversationId, userId) {
         const result = await db.query(
             `SELECT 
                 c.*,
@@ -625,6 +635,59 @@ class ConversationController {
         }
 
         return conversation;
+    }*/
+
+    async getConversationDetails(conversationId, userId) {
+        const conversationResult = await db.query(
+            // 1. Récupérer la conversation
+                `SELECT * FROM CONVERSATIONS WHERE id = $1`,
+                [conversationId]
+            );
+
+            if (conversationResult.rows.length === 0) {
+                return null;
+            }
+
+            const conversation = conversationResult.rows[0];
+
+            // 2. Récupérer les participants séparément
+            const participantsResult = await db.query(
+                `SELECT 
+                    pc.compte_id,
+                    cmp.nom_utilisateur_compte,
+                    cmp.photo_profil_compte,
+                    cmp.email,
+                    pc.role_participant,
+                    pc.est_actif,
+                    pc.est_administrateur,
+                    pc.est_en_vedette,
+                    pc.est_bloque,
+                    pc.surnom_dans_conversation,
+                    pc.couleur_affichage,
+                    pc.date_ajout,
+                    pc.date_derniere_activite,
+                    pc.messages_non_lus,
+                    pc.notifications_actives
+                FROM PARTICIPANTS_CONVERSATION pc
+                JOIN COMPTES cmp ON cmp.id = pc.compte_id
+                WHERE pc.conversation_id = $1
+                ORDER BY 
+                    CASE WHEN pc.compte_id = $2 THEN 0 ELSE 1 END,
+                    pc.role_participant,
+                    pc.date_ajout`,
+                [conversationId, userId]
+            );
+
+            conversation.participants = participantsResult.rows;
+            
+            // Déterminer le rôle de l'utilisateur courant
+            const monParticipant = conversation.participants.find(p => p.compte_id === userId);
+            conversation.mon_role = monParticipant?.role_participant || 'PARTICIPANT';
+            conversation.mes_notifications = monParticipant?.notifications_actives !== false;
+            conversation.mon_surnom = monParticipant?.surnom_dans_conversation || null;
+            conversation.messages_non_lus = monParticipant?.messages_non_lus || 0;
+
+            return conversation;
     }
 }
 

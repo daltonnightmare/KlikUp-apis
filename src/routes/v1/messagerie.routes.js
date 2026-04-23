@@ -21,6 +21,8 @@ const ReactionController = require('../../controllers/messagerie/ReactionControl
 const InvitationController = require('../../controllers/messagerie/InvitationController');
 const BlocageController = require('../../controllers/messagerie/BlocageController');
 const ModeleMessageController = require('../../controllers/messagerie/ModeleMessageController');
+const ContactEntiteController = require('../../controllers/messagerie/ContactEntiteController');
+const ContactController = require('../../controllers/messagerie/ContactController');
 
 // ==================== AUTHENTIFICATION GLOBALE ====================
 // Toutes les routes de messagerie nécessitent une authentification
@@ -626,5 +628,24 @@ router.post('/modeles/:id/dupliquer',
     ]),
     ModeleMessageController.duplicate.bind(ModeleMessageController)
 );
+
+
+// Routes pour contacter les entités
+router.post('/contacter-entite', ContactEntiteController.contacterEntite);
+router.get('/conversations-entites', ContactEntiteController.getMesConversationsEntites);
+router.get('/entites/:entiteType/:entiteId/conversations', ContactEntiteController.getConversationsEntite);
+router.patch('/conversations-entites/:conversationId/resoudre', ContactEntiteController.marquerResolue);
+router.get('/entites-disponibles', ContactEntiteController.getEntitesDisponibles);
+router.get('/entites/:type/:id', ContactEntiteController.getEntiteDetails);
+
+// Routes pour les contacts
+router.get('/contacts', ContactController.getMesContacts);
+router.get('/contacts/recherche', ContactController.rechercherUtilisateurs);
+router.get('/contacts/suggestions', ContactController.getSuggestions);
+router.get('/contacts/favoris', ContactController.getFavoris);
+router.put('/contacts/:contactId/favori', ContactController.toggleFavori);
+router.put('/contacts/:contactId/bloquer', ContactController.toggleBlock);
+router.get('/contacts/bloques', ContactController.getBloques);
+router.get('/contacts/:contactId', ContactController.getContactProfile);
 
 module.exports = router;
