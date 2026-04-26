@@ -5,6 +5,7 @@ const { ValidationError } = require('../../utils/errors/AppError');
 const CacheService = require('../../services/cache/CacheService');
 const AuditService = require('../../services/audit/AuditService');
 const { logInfo, logError } = require('../../configuration/logger');
+const { cli } = require('winston/lib/winston/config');
 
 class ConfigurationController {
     /**
@@ -13,6 +14,7 @@ class ConfigurationController {
      * @access ADMINISTRATEUR_PLATEFORME
      */
     async findAll(req, res, next) {
+        const client = await pool.getClient();
         try {
             const { entite_type, entite_id, categorie } = req.query;
 
@@ -51,7 +53,7 @@ class ConfigurationController {
 
             query += ' ORDER BY entite_type, entite_id, cle';
 
-            const result = await pool.query(query, params);
+            const result = await client.query(query, params);
 
             // Organisation par catégorie
             const organized = {};
@@ -73,6 +75,11 @@ class ConfigurationController {
             logError('Erreur récupération configurations:', error);
             next(error);
         }
+        finally {
+            if (client) {
+                client.release();
+            }
+        }
     }
 
     /**
@@ -82,10 +89,11 @@ class ConfigurationController {
      */
     async findByKey(req, res, next) {
         try {
+            const client = await pool.getClient();
             const { cle } = req.params;
             const { entite_type = 'PLATEFORME', entite_id = 1 } = req.query;
 
-            const result = await pool.query(
+            const result = await client.query(
                 `SELECT * FROM CONFIGURATIONS 
                  WHERE entite_type = $1 
                  AND (entite_id = $2 OR entite_id IS NULL)
@@ -122,7 +130,12 @@ class ConfigurationController {
         } catch (error) {
             logError('Erreur récupération configuration:', error);
             next(error);
+        } finally {
+            if (client) {
+                client.release();
+            }
         }
+        
     }
 
     /**
@@ -131,8 +144,9 @@ class ConfigurationController {
      * @access ADMINISTRATEUR_PLATEFORME
      */
     async createOrUpdate(req, res, next) {
-        const client = await pool.connect();
+        
         try {
+            const client = await pool.getClient();
             await client.query('BEGIN');
 
             const {
@@ -231,8 +245,9 @@ class ConfigurationController {
      * @access ADMINISTRATEUR_PLATEFORME
      */
     async delete(req, res, next) {
-        const client = await pool.connect();
+        
         try {
+            const client = await pool.getClient();
             await client.query('BEGIN');
 
             const { id } = req.params;
@@ -281,13 +296,14 @@ class ConfigurationController {
      */
     async getBatch(req, res, next) {
         try {
+            const client = await pool.getClient();
             const { cles, entite_type = 'PLATEFORME', entite_id = 1 } = req.body;
 
             if (!cles || !Array.isArray(cles)) {
                 throw new ValidationError('Liste de clés requise');
             }
-
-            const result = await pool.query(
+            await client.query('BEGIN');
+            const result = await client.query(
                 `SELECT cle, valeur, valeur_json, type_valeur
                  FROM CONFIGURATIONS
                  WHERE entite_type = $1 
@@ -310,7 +326,7 @@ class ConfigurationController {
                     configs[row.cle] = row.valeur;
                 }
             });
-
+            await client.query('COMMIT');
             res.json({
                 status: 'success',
                 data: configs
@@ -318,7 +334,12 @@ class ConfigurationController {
 
         } catch (error) {
             logError('Erreur récupération batch configurations:', error);
+            client.query('ROLLBACK');
             next(error);
+        } finally {
+            if (client) {
+                client.release();
+            }
         }
     }
 
@@ -329,7 +350,9 @@ class ConfigurationController {
      */
     async getSystemConfig(req, res, next) {
         try {
-            const result = await pool.query(`
+            const client = await pool.getClient();
+            await client.query('BEGIN');
+            const result = await client.query(`
                 SELECT 
                     (SELECT valeur FROM CONFIGURATIONS WHERE cle = 'system.name' AND entite_type = 'PLATEFORME') as nom_plateforme,
                     (SELECT valeur FROM CONFIGURATIONS WHERE cle = 'system.version' AND entite_type = 'PLATEFORME') as version,
@@ -337,7 +360,7 @@ class ConfigurationController {
                     (SELECT valeur FROM CONFIGURATIONS WHERE cle = 'system.maintenance_mode' AND entite_type = 'PLATEFORME') as maintenance_mode,
                     (SELECT valeur_json FROM CONFIGURATIONS WHERE cle = 'system.features' AND entite_type = 'PLATEFORME') as fonctionnalites
             `);
-
+            await client.query('COMMIT');
             res.json({
                 status: 'success',
                 data: result.rows[0] || {}
@@ -345,8 +368,14 @@ class ConfigurationController {
 
         } catch (error) {
             logError('Erreur récupération config système:', error);
+            await client.query('ROLLBACK');
             next(error);
+        }finally {
+            if (client) {
+                client.release();
+            }
         }
+
     }
 
     /**
@@ -355,7 +384,7 @@ class ConfigurationController {
      * @access ADMINISTRATEUR_PLATEFORME
      */
     async toggleMaintenance(req, res, next) {
-        const client = await pool.connect();
+        const client = await pool.getClient();
         try {
             await client.query('BEGIN');
 

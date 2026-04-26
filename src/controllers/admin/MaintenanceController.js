@@ -154,6 +154,7 @@ class MaintenanceController {
      */
     async getLogs(req, res, next) {
         try {
+            const client = await pool.getClient();
             const {
                 level = 'all',
                 service = 'api',
@@ -213,11 +214,11 @@ class MaintenanceController {
 
             query += ` ORDER BY timestamp DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
             params.push(parseInt(limit), parseInt(offset));
-
-            const result = await pool.query(query, params);
+            await client.query('BEGIN');
+            const result = await client.query(query, params);
 
             // Statistiques des logs
-            const stats = await pool.query(`
+            const stats = await client.query(`
                 SELECT 
                     COUNT(*) as total,
                     COUNT(*) FILTER (WHERE level = 'ERROR') as errors,
@@ -228,7 +229,7 @@ class MaintenanceController {
                 FROM system_logs
                 WHERE timestamp >= NOW() - INTERVAL '24 hours'
             `);
-
+            await client.query('COMMIT');
             res.json({
                 status: 'success',
                 data: result.rows,
@@ -241,9 +242,15 @@ class MaintenanceController {
             });
 
         } catch (error) {
+            await client.query('ROLLBACK');
             logError('Erreur récupération logs:', error);
             next(error);
+        }finally {
+            if (client) {
+                await client.release();
+            }
         }
+
     }
 
     /**

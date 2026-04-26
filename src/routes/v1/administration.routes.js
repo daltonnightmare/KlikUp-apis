@@ -18,6 +18,7 @@ const DashboardController = require('../../controllers/admin/DashboardController
 const MaintenanceController = require('../../controllers/admin/MaintenanceController');
 const ModerationController = require('../../controllers/admin/ModerationController');
 const RetentionController = require('../../controllers/admin/RetentionController');
+const UserManagementController = require('../../controllers/admin/UsersManagerController');
 
 // ==================== AUTHENTIFICATION ET RÔLES ====================
 // Toutes les routes d'administration nécessitent une authentification
@@ -768,5 +769,22 @@ router.get('/retention/history',
     ]),
     RetentionController.getCleanupHistory.bind(RetentionController)
 );
+
+
+/// ==================== VI. GESTION DES UTILISATEURS ====================
+// Gestion des utilisateurs, rôles, permissions, sessions
+
+router.get('/users', UserManagementController.getAllUsers);
+router.get('/users/stats', UserManagementController.getUserStats);
+router.get('/users/:id', UserManagementController.getUserById);
+router.post('/users', UserManagementController.createUser);
+router.put('/users/:id', UserManagementController.updateUser);
+router.post('/users/:id/change-password', UserManagementController.changeUserPassword);
+router.post('/users/:id/change-role', UserManagementController.changeUserRole);
+router.post('/users/:id/suspend', UserManagementController.suspendUser);
+router.post('/users/:id/activate', UserManagementController.activateUser);
+router.post('/users/:id/ban', UserManagementController.banUser);
+router.delete('/users/:id', UserManagementController.deleteUser);
+router.post('/users/:id/restore', UserManagementController.restoreUser);
 
 module.exports = router;

@@ -4,7 +4,7 @@ const { AppError } = require('../../utils/errors/AppError');
 const { ValidationError } = require('../../utils/errors/AppError');
 const CacheService = require('../../services/cache/CacheService');
 const ExportService = require('../../services/export/ExportService');
-const { logInfo, logError } = require('../../configuration/logger');
+const logger = require('../../configuration/logger');
 
 class DashboardController {
     /**
@@ -13,7 +13,9 @@ class DashboardController {
      * @access ADMINISTRATEUR_PLATEFORME
      */
     async getGlobalStats(req, res, next) {
+        const client = await pool.getClient();
         try {
+            
             const { periode = '30j', date_debut, date_fin } = req.query;
 
             // Vérification cache
@@ -68,7 +70,7 @@ class DashboardController {
                 : `date_creation >= NOW() - ${intervalle}`;
 
             // 1. STATISTIQUES COMPTES
-            const statsComptes = await pool.query(`
+            const statsComptes = await client.query(`
                 SELECT 
                     COUNT(*) as total_comptes,
                     COUNT(*) FILTER (WHERE date_creation >= NOW() - INTERVAL '7 days') as nouveaux_7j,
@@ -76,17 +78,14 @@ class DashboardController {
                     COUNT(*) FILTER (WHERE statut = 'EST_AUTHENTIFIE') as comptes_actifs,
                     COUNT(*) FILTER (WHERE statut = 'SUSPENDU') as comptes_suspendus,
                     COUNT(*) FILTER (WHERE statut = 'BANNI') as comptes_bannis,
-                    COUNT(*) FILTER (WHERE compte_role LIKE '%ADMINISTRATEUR%') as administrateurs,
-                    COUNT(*) FILTER (WHERE compte_role LIKE '%BLOGUEUR%') as blogueurs,
-                    COUNT(*) FILTER (WHERE compagnie_id IS NOT NULL) as comptes_compagnie,
-                    COUNT(*) FILTER (WHERE restaurant_id IS NOT NULL) as comptes_restaurant,
-                    COUNT(*) FILTER (WHERE boutique_id IS NOT NULL) as comptes_boutique
+                    COUNT(*) FILTER (WHERE compte_role::text LIKE '%ADMINISTRATEUR%') as administrateurs,
+                    COUNT(*) FILTER (WHERE compte_role::text LIKE '%BLOGUEUR%') as blogueurs
                 FROM COMPTES
                 WHERE est_supprime = false
             `);
 
             // 2. STATISTIQUES COMMANDES
-            const statsCommandes = await pool.query(`
+            const statsCommandes = await client.query(`
                 SELECT 
                     COUNT(*) as total_commandes,
                     SUM(prix_total_commande) as chiffre_affaires_total,
@@ -100,7 +99,7 @@ class DashboardController {
             `);
 
             // 3. STATISTIQUES BOUTIQUES
-            const statsBoutiques = await pool.query(`
+            const statsBoutiques = await client.query(`
                 SELECT 
                     COUNT(*) as total_boutiques,
                     COUNT(*) FILTER (WHERE est_actif = true) as boutiques_actives,
@@ -111,7 +110,7 @@ class DashboardController {
             `);
 
             // 4. STATISTIQUES RESTAURANTS
-            const statsRestaurants = await pool.query(`
+            const statsRestaurants = await client.query(`
                 SELECT 
                     COUNT(*) as total_restaurants,
                     COUNT(*) FILTER (WHERE est_actif = true) as restaurants_actifs,
@@ -121,7 +120,7 @@ class DashboardController {
             `);
 
             // 5. STATISTIQUES TRANSPORT
-            const statsTransport = await pool.query(`
+            const statsTransport = await client.query(`
                 SELECT 
                     COUNT(*) as total_compagnies,
                     COUNT(*) as total_emplacements,
@@ -131,18 +130,23 @@ class DashboardController {
             `);
 
             // 6. STATISTIQUES BLOG
-            const statsBlog = await pool.query(`
+            const statsBlog = await client.query(`
                 SELECT 
                     COUNT(*) as total_articles,
                     COUNT(*) FILTER (WHERE statut = 'PUBLIE') as articles_publies,
                     COUNT(*) FILTER (WHERE statut = 'EN_ATTENTE_VALIDATION') as articles_validation,
                     COUNT(*) as total_commentaires,
-                    COUNT(*) FILTER (WHERE statut = 'EN_ATTENTE') as commentaires_moderation
+                    COUNT(*) FILTER (WHERE statut = 'SIGNALE') as articles_signales,
+                    COUNT(*) FILTER (WHERE statut = 'SUPPRIME') as articles_supprimes,
+                    COUNT(*) FILTER (WHERE statut = 'BROUILLON') as articles_brouillon,
+                    COUNT(*) FILTER (WHERE statut = 'PROGRAMME') as articles_programme,
+                    COUNT(*) FILTER (WHERE statut = 'ARCHIVE') as articles_archives
+    
                 FROM ARTICLES_BLOG_PLATEFORME
             `);
 
             // 7. STATISTIQUES FINANCIÈRES
-            const statsFinancieres = await pool.query(`
+            const statsFinancieres = await client.query(`
                 SELECT 
                     COALESCE(SUM(portefeuille_plateforme), 0) as portefeuille_plateforme,
                     COALESCE((
@@ -165,7 +169,7 @@ class DashboardController {
             `);
 
             // 8. ÉVOLUTION JOURNALIÈRE
-            const evolution = await pool.query(`
+            const evolution = await client.query(`
                 WITH dates AS (
                     SELECT generate_series(
                         CASE 
@@ -193,7 +197,7 @@ class DashboardController {
             `, [periode]);
 
             // 9. TOP 10 DES MEILLEURES BOUTIQUES
-            const topBoutiques = await pool.query(`
+            const topBoutiques = await client.query(`
                 SELECT 
                     b.id,
                     b.nom_boutique,
@@ -211,7 +215,7 @@ class DashboardController {
             `);
 
             // 10. ALERTES RÉCENTES
-            const alertes = await pool.query(`
+            const alertes = await client.query(`
                 SELECT 
                     id,
                     type_alerte,
@@ -255,8 +259,14 @@ class DashboardController {
             });
 
         } catch (error) {
-            logError('Erreur récupération dashboard:', error);
+            await client.query('ROLLBACK');
+            logger.error('Erreur récupération dashboard:', error);
             next(error);
+        }
+        finally {
+          
+            await client.release();
+            
         }
     }
 
@@ -266,8 +276,10 @@ class DashboardController {
      * @access ADMINISTRATEUR_PLATEFORME
      */
     async getRealtimeKPIs(req, res, next) {
+        const client = await pool.getClient();
         try {
-            const result = await pool.query(`
+            
+            const result = await client.query(`
                 WITH stats_courantes AS (
                     SELECT 
                         (SELECT COUNT(*) FROM COMPTES WHERE date_creation >= NOW() - INTERVAL '1 hour') as inscriptions_heure,
@@ -287,8 +299,13 @@ class DashboardController {
             });
 
         } catch (error) {
-            logError('Erreur récupération KPIs temps réel:', error);
+            logger.error('Erreur récupération KPIs temps réel:', error);
             next(error);
+        }
+        finally {
+            if (client) {
+                client.release();
+            }
         }
     }
 
@@ -298,9 +315,10 @@ class DashboardController {
      * @access ADMINISTRATEUR_PLATEFORME
      */
     async getCharts(req, res, next) {
+        const client = await pool.getClient();
         try {
             const { type = 'commandes', periode = '30j' } = req.query;
-
+            
             let intervalle;
             let groupBy;
 
@@ -379,7 +397,7 @@ class DashboardController {
                     throw new ValidationError('Type de graphique invalide');
             }
 
-            const result = await pool.query(query);
+            const result = await client.query(query);
 
             res.json({
                 status: 'success',
@@ -391,8 +409,13 @@ class DashboardController {
             });
 
         } catch (error) {
-            logError('Erreur récupération graphiques:', error);
+            logger.error('Erreur récupération graphiques:', error);
             next(error);
+        }
+        finally {
+            if (client) {
+                client.release();
+            }
         }
     }
 
@@ -469,7 +492,7 @@ class DashboardController {
             res.send(exportedData);
 
         } catch (error) {
-            logError('Erreur export rapport:', error);
+            logger.error('Erreur export rapport:', error);
             next(error);
         }
     }

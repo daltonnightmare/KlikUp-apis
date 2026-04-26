@@ -14,8 +14,9 @@ class RetentionController {
      * @access ADMINISTRATEUR_PLATEFORME
      */
     async getPolicies(req, res, next) {
+        const client = await pool.getClient();
         try {
-            const result = await pool.query(`
+            const result = client.query(`
                 SELECT 
                     id,
                     table_cible,
@@ -69,10 +70,11 @@ class RetentionController {
      * @access ADMINISTRATEUR_PLATEFORME
      */
     async getPolicyById(req, res, next) {
+        const client = await pool.getClient();
         try {
             const { id } = req.params;
 
-            const result = await pool.query(
+            const result = client.query(
                 `SELECT 
                     p.*,
                     (
@@ -134,7 +136,7 @@ class RetentionController {
      * @access ADMINISTRATEUR_PLATEFORME
      */
     async createPolicy(req, res, next) {
-        const client = await pool.connect();
+        const client = await pool.getClient();
         try {
             await client.query('BEGIN');
 
@@ -242,7 +244,7 @@ class RetentionController {
      * @access ADMINISTRATEUR_PLATEFORME
      */
     async updatePolicy(req, res, next) {
-        const client = await pool.connect();
+        const client = await pool.getClient();
         try {
             await client.query('BEGIN');
 
@@ -347,7 +349,7 @@ class RetentionController {
      * @access ADMINISTRATEUR_PLATEFORME
      */
     async deletePolicy(req, res, next) {
-        const client = await pool.connect();
+        const client = await pool.getClient();
         try {
             await client.query('BEGIN');
 
@@ -411,7 +413,7 @@ class RetentionController {
      * @access ADMINISTRATEUR_PLATEFORME
      */
     async togglePolicy(req, res, next) {
-        const client = await pool.connect();
+        const client = await pool.getClient();
         try {
             await client.query('BEGIN');
 
@@ -457,7 +459,7 @@ class RetentionController {
      * @access ADMINISTRATEUR_PLATEFORME
      */
     async cleanTable(req, res, next) {
-        const client = await pool.connect();
+        const client = await pool.getClient();
         try {
             await client.query('BEGIN');
 
@@ -622,9 +624,10 @@ class RetentionController {
     async cleanAll(req, res, next) {
         try {
             const { simulate = false } = req.query;
+            const client = await pool.getClient();
 
             // Récupérer toutes les politiques actives
-            const policies = await pool.query(
+            const policies = await client.query(
                 `SELECT * FROM POLITIQUES_RETENTION 
                  WHERE est_active = true
                  ORDER BY table_cible`
@@ -703,7 +706,8 @@ class RetentionController {
      */
     async getRetentionStats(req, res, next) {
         try {
-            const stats = await pool.query(`
+            const client = await pool.getClient();
+            const stats = await client.query(`
                 WITH politiques_stats AS (
                     SELECT 
                         p.table_cible,
