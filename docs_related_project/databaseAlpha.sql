@@ -2701,3 +2701,261 @@ ADD COLUMN IF NOT EXISTS two_factor_secret VARCHAR(255),
 ADD COLUMN IF NOT EXISTS two_factor_temp_secret VARCHAR(255),
 ADD COLUMN IF NOT EXISTS two_factor_actif BOOLEAN DEFAULT FALSE,
 ADD COLUMN IF NOT EXISTS two_factor_backup_codes JSONB DEFAULT '[]'::jsonb;
+
+
+
+ 
+CREATE TYPE type_demande_creation AS ENUM (
+    'RESTAURANT_FAST_FOOD',
+    'BOUTIQUE',
+    'COMPAGNIE_TRANSPORT'  -- Extension possible
+);
+
+CREATE TYPE statut_demande_creation AS ENUM (
+    'BROUILLON',                -- En cours de saisie
+    'SOUMISE',                  -- Soumise pour validation
+    'EN_VALIDATION',            -- En cours de validation
+    'VALIDATION_PLATEFORME',    -- En attente validation plateforme
+    'COMPLEMENT_INFO',          -- Demande informations complémentaires
+    'APPROUVEE',                -- Approuvée
+    'REJETEE',                  -- Rejetée
+    'ANNULEE',                  -- Annulée par demandeur
+    'COMPLETEE'                 -- Entité créée avec succès
+);
+
+CREATE TYPE priorite_demande AS ENUM (
+    'BASSE',
+    'NORMALE',
+    'HAUTE',
+    'URGENTE'
+);
+
+CREATE TABLE DEMANDES_CREATION (
+    id                          SERIAL PRIMARY KEY,
+    uuid_demande                UUID DEFAULT gen_random_uuid() UNIQUE,
+    
+    -- Types et références
+    type_demande                type_demande_creation NOT NULL,
+    statut                      statut_demande_creation DEFAULT 'BROUILLON',
+    priorite                    priorite_demande DEFAULT 'NORMALE',
+    
+    -- Demandeur
+    demandeur_id                INTEGER NOT NULL REFERENCES COMPTES(id) ON DELETE RESTRICT,
+    
+    -- Informations générales
+    nom_entite                  VARCHAR(255) NOT NULL,
+    description_entite          TEXT,
+    logo_provisoire             VARCHAR(500),
+    
+    -- Informations spécifiques RESTAURANT
+    -- (Ces champs ne sont utilisés que pour les restaurants)
+    heures_ouverture            TIME,
+    heures_fermeture            TIME,
+    jours_ouverture             jours_ouverture DEFAULT 'LUNDI_VENDREDI',
+    frais_livraison_proposes     DECIMAL(10,2),
+    temps_preparation_moyen      INTEGER,  -- en minutes
+    type_cuisine                 VARCHAR(100),
+    
+    -- Informations spécifiques BOUTIQUE
+    -- (Ces champs ne sont utilisés que pour les boutiques)
+    types_produits_proposes      JSONB DEFAULT '[]',
+    politique_retour             TEXT,
+    delai_livraison_moyen        INTEGER,  -- en jours
+    
+    -- Adresse (via table centralisée)
+    adresse_id                  INTEGER REFERENCES ADRESSES(id) ON DELETE SET NULL,
+    adresse_texte               TEXT,  -- Adresse brute avant création dans ADRESSES
+    
+    -- Coordonnées GPS (si fournies directement)
+    coordonnees_gps             geometry(Point, 4326),
+    
+    -- Documents justificatifs
+    documents_justificatifs      JSONB DEFAULT '[]',  -- [{type, url, nom_fichier}]
+    
+    -- Informations contractuelles
+    pourcentage_commission_souhaite DECIMAL(5,2) CHECK (pourcentage_commission_souhaite BETWEEN 0 AND 100),
+    contrat_trouve              BOOLEAN DEFAULT FALSE,
+    contrat_signe_url           VARCHAR(500),
+    
+    -- Processus de validation
+    valide_par                  INTEGER REFERENCES COMPTES(id) ON DELETE SET NULL,
+    date_validation             TIMESTAMP,
+    commentaire_validation      TEXT,
+    motif_rejet                 TEXT,
+    
+    -- Demandes de compléments
+    demande_complement_envoyee  BOOLEAN DEFAULT FALSE,
+    demande_complement_message  TEXT,
+    date_demande_complement     TIMESTAMP,
+    reponse_complement          TEXT,
+    date_reponse_complement     TIMESTAMP,
+    
+    -- Entité créée (après validation)
+    entite_creee_id             INTEGER,  -- restaurant_id OU boutique_id selon type
+    date_creation_entite        TIMESTAMP,
+    
+    -- Traçabilité
+    date_soumission             TIMESTAMP,
+    date_derniere_modification  TIMESTAMP DEFAULT NOW(),
+    date_creation               TIMESTAMP DEFAULT NOW(),
+    
+    -- Métadonnées
+    metadata                    JSONB DEFAULT '{}',
+    ip_creation                 INET,
+    user_agent                  TEXT,
+    
+    -- Contraintes
+    CONSTRAINT check_nom_entite_longueur CHECK (char_length(nom_entite) >= 3),
+    CONSTRAINT check_commission CHECK (
+        pourcentage_commission_souhaite IS NULL OR 
+        pourcentage_commission_souhaite BETWEEN 0 AND 100
+    )
+);
+
+CREATE INDEX idx_demandes_statut          ON DEMANDES_CREATION(statut);
+CREATE INDEX idx_demandes_type            ON DEMANDES_CREATION(type_demande, statut);
+CREATE INDEX idx_demandes_demandeur       ON DEMANDES_CREATION(demandeur_id);
+CREATE INDEX idx_demandes_date_soumission ON DEMANDES_CREATION(date_soumission DESC);
+CREATE INDEX idx_demandes_priorite        ON DEMANDES_CREATION(priorite, statut);
+CREATE INDEX idx_demandes_uuid            ON DEMANDES_CREATION(uuid_demande);
+CREATE INDEX idx_demandes_adresse         ON DEMANDES_CREATION(adresse_id);
+
+-- Index partiel pour les demandes en attente
+CREATE INDEX idx_demandes_en_attente ON DEMANDES_CREATION(priorite, date_soumission)
+    WHERE statut IN ('SOUMISE', 'EN_VALIDATION', 'VALIDATION_PLATEFORME');
+
+-- Index géospatial
+CREATE INDEX idx_demandes_coords ON DEMANDES_CREATION USING GIST(coordonnees_gps);
+
+-- =============================================================================
+-- TRIGGERS
+-- =============================================================================
+CREATE OR REPLACE FUNCTION fn_update_demande_modification()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.date_derniere_modification = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_demandes_creation_maj
+    BEFORE UPDATE ON DEMANDES_CREATION
+    FOR EACH ROW EXECUTE FUNCTION fn_update_demande_modification();*/
+
+-- Trigger pour validation des statuts
+CREATE OR REPLACE FUNCTION fn_valider_transition_statut()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Vérification des transitions valides
+    IF OLD.statut = 'APPROUVEE' AND NEW.statut != 'APPROUVEE' THEN
+        RAISE EXCEPTION 'Une demande approuvée ne peut pas changer de statut';
+    END IF;
+    
+    IF OLD.statut = 'COMPLETEE' AND NEW.statut != 'COMPLETEE' THEN
+        RAISE EXCEPTION 'Une demande complétée ne peut pas changer de statut';
+    END IF;
+    
+    -- Auto-renseignement date_soumission
+    IF NEW.statut = 'SOUMISE' AND OLD.statut != 'SOUMISE' THEN
+        NEW.date_soumission = NOW();
+    END IF;
+    
+    -- Auto-renseignement date_validation
+    IF NEW.statut IN ('APPROUVEE', 'REJETEE') AND OLD.statut != NEW.statut THEN
+        NEW.date_validation = NOW();
+    END IF;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_demandes_validation_statut
+    BEFORE UPDATE ON DEMANDES_CREATION
+    FOR EACH ROW
+    WHEN (OLD.statut IS DISTINCT FROM NEW.statut)
+    EXECUTE FUNCTION fn_valider_transition_statut();
+
+-- =============================================================================
+-- TABLE DES COMMENTAIRES/HISTORIQUE DES DEMANDES
+-- =============================================================================
+
+CREATE TABLE DEMANDES_HISTORIQUE (
+    id               SERIAL PRIMARY KEY,
+    demande_id       INTEGER NOT NULL REFERENCES DEMANDES_CREATION(id) ON DELETE CASCADE,
+    action_type      VARCHAR(50) NOT NULL,  -- MODIFICATION, VALIDATION, REJET, COMPLEMENT, COMMENTAIRE
+    ancien_statut    statut_demande_creation,
+    nouveau_statut   statut_demande_creation,
+    utilisateur_id   INTEGER REFERENCES COMPTES(id) ON DELETE SET NULL,
+    message          TEXT,
+    metadata         JSONB DEFAULT '{}',
+    date_action      TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_demandes_hist_demande ON DEMANDES_HISTORIQUE(demande_id);
+CREATE INDEX idx_demandes_hist_date    ON DEMANDES_HISTORIQUE(date_action DESC);
+
+-- =============================================================================
+-- TABLE DES PIÈCES JOINTES PAR DEMANDE
+-- =============================================================================
+
+CREATE TABLE DEMANDES_PIECES (
+    id               SERIAL PRIMARY KEY,
+    demande_id       INTEGER NOT NULL REFERENCES DEMANDES_CREATION(id) ON DELETE CASCADE,
+    type_piece       VARCHAR(50) NOT NULL,  -- Kbis, CNI, CONTRAT, PHOTO, etc.
+    nom_fichier      VARCHAR(255) NOT NULL,
+    chemin_fichier   VARCHAR(500) NOT NULL,
+    mime_type        VARCHAR(100),
+    taille_fichier   BIGINT,
+    est_verifie      BOOLEAN DEFAULT FALSE,
+    verifie_par      INTEGER REFERENCES COMPTES(id) ON DELETE SET NULL,
+    date_verification TIMESTAMP,
+    date_upload      TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_demandes_pieces_demande ON DEMANDES_PIECES(demande_id);
+
+-- =============================================================================
+-- VUES UTILES
+-- =============================================================================
+
+-- Vue des demandes en attente de validation
+CREATE VIEW VUE_DEMANDES_EN_ATTENTE AS
+SELECT 
+    dc.id,
+    dc.uuid_demande,
+    dc.type_demande,
+    dc.nom_entite,
+    dc.statut,
+    dc.priorite,
+    c.nom_utilisateur_compte AS demandeur_nom,
+    c.email AS demandeur_email,
+    c.numero_de_telephone AS demandeur_telephone,
+    dc.date_soumission,
+    ROUND(EXTRACT(EPOCH FROM (NOW() - dc.date_soumission)) / 3600, 1) AS heures_attente,
+    dc.pourcentage_commission_souhaite
+FROM DEMANDES_CREATION dc
+JOIN COMPTES c ON c.id = dc.demandeur_id
+WHERE dc.statut IN ('SOUMISE', 'EN_VALIDATION', 'VALIDATION_PLATEFORME')
+ORDER BY 
+    CASE dc.priorite
+        WHEN 'URGENTE' THEN 1
+        WHEN 'HAUTE'   THEN 2
+        WHEN 'NORMALE' THEN 3
+        ELSE 4
+    END,
+    dc.date_soumission ASC;
+
+
+
+CREATE TABLE DEMANDES_NOTIFICATIONS (
+    id               SERIAL PRIMARY KEY,
+    demande_id       INTEGER NOT NULL REFERENCES DEMANDES_CREATION(id) ON DELETE CASCADE,
+    destinataire_id  INTEGER NOT NULL REFERENCES COMPTES(id) ON DELETE CASCADE,
+    type_notification VARCHAR(50) NOT NULL,  -- SOUMISSION, VALIDATION, REJET, COMPLEMENT
+    message          TEXT NOT NULL,
+    est_lue          BOOLEAN DEFAULT FALSE,
+    date_envoi       TIMESTAMP DEFAULT NOW(),
+    date_lecture     TIMESTAMP
+);
+
+CREATE INDEX idx_demandes_notif_destinataire ON DEMANDES_NOTIFICATIONS(destinataire_id, est_lue);

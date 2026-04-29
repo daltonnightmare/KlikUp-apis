@@ -7,7 +7,7 @@ const NotificationService = require('../../services/notification/NotificationSer
 const EmailService = require('../../services/email/EmailService');
 const SmsService = require('../../services/sms/SmsService');
 const CacheService = require('../../services/cache/CacheService');
-
+const logger = require('../../configuration/logger');
 class UserManagementController {
     
     // ==================== LISTE DES UTILISATEURS ====================
@@ -17,7 +17,7 @@ class UserManagementController {
      * @route GET /api/v1/admin/users
      */
     async getAllUsers(req, res, next) {
-        const client = await db.pool.connect();
+        const client = await db.getClient();
         try {
             const {
                 page = 1,
@@ -117,7 +117,7 @@ class UserManagementController {
             };
             const orderColumn = sortableColumns[sort_by] || 'c.date_creation';
             const orderDirection = sort_order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
-
+            await client.query('BEGIN');
             // Requête principale
             const query = `
                 SELECT 
@@ -170,7 +170,7 @@ class UserManagementController {
                 GROUP BY compte_role
                 ORDER BY count DESC
             `);
-
+            await client.query('COMMIT');
             res.json({
                 success: true,
                 data: result.rows,
@@ -188,6 +188,7 @@ class UserManagementController {
 
         } catch (error) {
             console.error('Erreur getAllUsers:', error);
+            client.query('ROLLBACK');
             next(error);
         } finally {
             client.release();

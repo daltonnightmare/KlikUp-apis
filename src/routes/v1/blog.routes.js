@@ -491,6 +491,7 @@ router.post('/commentaires/:id/signaler',
 router.patch('/commentaires/:id/moderer',
     authMiddleware.authenticate,
     roleMiddleware.isModerator(),
+    roleMiddleware.isAdmin(),
     validationMiddleware.validate([
         param('id').isInt(),
         body('statut').isIn(['APPROUVE', 'REJETE', 'MASQUE']),
@@ -510,6 +511,7 @@ router.patch('/commentaires/:id/moderer',
 router.get('/commentaires/signalements/en-attente',
     authMiddleware.authenticate,
     roleMiddleware.isModerator(),
+    roleMiddleware.isAdmin(),
     validationMiddleware.validate([
         query('page').optional().isInt({ min: 1 }),
         query('limit').optional().isInt({ min: 1, max: 100 })
@@ -528,7 +530,8 @@ router.get('/commentaires/signalements/en-attente',
  */
 router.patch('/commentaires/signalements/:id/traiter',
     authMiddleware.authenticate,
-    roleMiddleware.isModerator(),
+    //roleMiddleware.isModerator(),
+    roleMiddleware.isAdmin(),
     validationMiddleware.validate([
         param('id').isInt(),
         body('statut').isIn(['TRAITE', 'REJETE']),

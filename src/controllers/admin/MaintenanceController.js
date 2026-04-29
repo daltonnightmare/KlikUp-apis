@@ -12,7 +12,7 @@ const AuditService = require('../../services/audit/AuditService');
 const NotificationService = require('../../services/notification/NotificationService');
 const QueueService = require('../../services/queue/QueueService');
 const CacheService = require('../../services/cache/CacheService');
-const { logInfo, logError, logWarn } = require('../../configuration/logger');
+const logger = require('../../configuration/logger');
 
 class MaintenanceController {
     /**
@@ -22,6 +22,7 @@ class MaintenanceController {
      */
     async getSystemHealth(req, res, next) {
         try {
+            const clientDb = pool;
             const startTime = Date.now();
 
             // 1. STATUT DE LA BASE DE DONNÉES
@@ -80,10 +81,11 @@ class MaintenanceController {
 
             // Alerte si problème critique
             if (globalStatus.status === 'CRITICAL') {
+
                 await NotificationService.notifyAdmins({
                     type: 'SYSTEM_HEALTH_CRITICAL',
                     titre: '🚨 État système critique',
-                    message: `Plusieurs composants sont en état critique`,
+                    corps: `Plusieurs composants sont en état critique`,
                     donnees: healthData,
                     priorite: 'CRITIQUE'
                 });
@@ -95,7 +97,7 @@ class MaintenanceController {
             });
 
         } catch (error) {
-            logError('Erreur vérification santé système:', error);
+            logger.error('Erreur vérification santé système:', error);
             next(error);
         }
     }
@@ -142,7 +144,7 @@ class MaintenanceController {
             });
 
         } catch (error) {
-            logError('Erreur récupération métriques:', error);
+            logger.error('Erreur récupération métriques:', error);
             next(error);
         }
     }
@@ -153,11 +155,11 @@ class MaintenanceController {
      * @access ADMINISTRATEUR_PLATEFORME
      */
     async getLogs(req, res, next) {
+        const client = await pool.getClient();
         try {
-            const client = await pool.getClient();
             const {
                 level = 'all',
-                service = 'api',
+                service = 'all',
                 limit = 100,
                 offset = 0,
                 date_debut,
@@ -165,92 +167,128 @@ class MaintenanceController {
                 search
             } = req.query;
 
-            // Construction de la requête
+            // Construction de la requête avec les bonnes colonnes de JOURNAL_AUDIT
             let query = `
                 SELECT 
                     id,
-                    timestamp,
-                    level,
-                    service,
-                    message,
+                    date_action as timestamp,
+                    CASE 
+                        WHEN succes = false THEN 'ERROR' 
+                        ELSE 'INFO' 
+                    END as level,
+                    ressource_type as service,
+                    action as message,
                     metadata,
-                    ip,
-                    user_id
-                FROM system_logs
+                    adresse_ip as ip,
+                    compte_id as user_id,
+                    duree_ms,
+                    code_erreur,
+                    message_erreur
+                FROM JOURNAL_AUDIT
                 WHERE 1=1
             `;
             const params = [];
             let paramIndex = 1;
 
+            // Filtre par niveau (succes = false pour ERROR, true pour INFO)
             if (level !== 'all') {
-                query += ` AND level = $${paramIndex}`;
-                params.push(level.toUpperCase());
+                if (level.toUpperCase() === 'ERROR') {
+                    query += ` AND succes = $${paramIndex}`;
+                    params.push(false);
+                } else if (level.toUpperCase() === 'INFO') {
+                    query += ` AND succes = $${paramIndex}`;
+                    params.push(true);
+                }
                 paramIndex++;
             }
 
+            // Filtre par service (ressource_type)
             if (service !== 'all') {
-                query += ` AND service = $${paramIndex}`;
+                query += ` AND ressource_type = $${paramIndex}`;
                 params.push(service);
                 paramIndex++;
             }
 
+            // Filtre par date de début
             if (date_debut) {
-                query += ` AND timestamp >= $${paramIndex}`;
+                query += ` AND date_action >= $${paramIndex}`;
                 params.push(date_debut);
                 paramIndex++;
             }
 
+            // Filtre par date de fin
             if (date_fin) {
-                query += ` AND timestamp <= $${paramIndex}`;
+                query += ` AND date_action <= $${paramIndex}`;
                 params.push(date_fin);
                 paramIndex++;
             }
 
+            // Filtre par recherche (action ou metadata)
             if (search) {
-                query += ` AND message ILIKE $${paramIndex}`;
+                query += ` AND (action ILIKE $${paramIndex} OR metadata::text ILIKE $${paramIndex})`;
                 params.push(`%${search}%`);
                 paramIndex++;
             }
 
-            query += ` ORDER BY timestamp DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+            // Ordre et pagination
+            query += ` ORDER BY date_action DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
             params.push(parseInt(limit), parseInt(offset));
+
             await client.query('BEGIN');
+            
             const result = await client.query(query, params);
 
-            // Statistiques des logs
+            // Statistiques des logs (sans la colonne service qui n'existe pas)
             const stats = await client.query(`
                 SELECT 
                     COUNT(*) as total,
-                    COUNT(*) FILTER (WHERE level = 'ERROR') as errors,
-                    COUNT(*) FILTER (WHERE level = 'WARN') as warnings,
-                    COUNT(*) FILTER (WHERE level = 'INFO') as infos,
-                    MIN(timestamp) as plus_ancien,
-                    MAX(timestamp) as plus_recent
-                FROM system_logs
-                WHERE timestamp >= NOW() - INTERVAL '24 hours'
+                    COUNT(*) FILTER (WHERE succes = false) as errors,
+                    COUNT(*) FILTER (WHERE succes = true) as infos,
+                    MIN(date_action) as plus_ancien,
+                    MAX(date_action) as plus_recent,
+                    COUNT(DISTINCT ressource_type) as services_distincts
+                FROM JOURNAL_AUDIT
+                WHERE date_action >= NOW() - INTERVAL '24 hours'
             `);
+
+            // Statistiques par ressource_type (service)
+            const serviceStats = await client.query(`
+                SELECT 
+                    ressource_type as service,
+                    COUNT(*) as count,
+                    COUNT(*) FILTER (WHERE succes = false) as errors
+                FROM JOURNAL_AUDIT
+                WHERE date_action >= NOW() - INTERVAL '24 hours'
+                GROUP BY ressource_type
+                ORDER BY count DESC
+                LIMIT 10
+            `);
+
             await client.query('COMMIT');
+
             res.json({
                 status: 'success',
                 data: result.rows,
                 pagination: {
                     limit: parseInt(limit),
                     offset: parseInt(offset),
-                    total: parseInt(stats.rows[0].total)
+                    total: parseInt(stats.rows[0]?.total || 0)
                 },
-                statistiques: stats.rows[0]
+                statistiques: {
+                    ...stats.rows[0],
+                    par_service: serviceStats.rows
+                }
             });
 
         } catch (error) {
             await client.query('ROLLBACK');
-            logError('Erreur récupération logs:', error);
+            logger.error('Erreur récupération logs:', error);
             next(error);
-        }finally {
+        } finally {
             if (client) {
-                await client.release();
+                client.release();
             }
         }
-
     }
 
     /**
@@ -291,7 +329,7 @@ class MaintenanceController {
             });
 
         } catch (error) {
-            logError('Erreur streaming logs:', error);
+            logger.error('Erreur streaming logs:', error);
             next(error);
         }
     }
@@ -325,7 +363,7 @@ class MaintenanceController {
                 adresse_ip: req.ip
             });
 
-            logInfo(`Cache nettoyé: ${deleted} clés supprimées (pattern: ${pattern})`);
+            logger.info(`Cache nettoyé: ${deleted} clés supprimées (pattern: ${pattern})`);
 
             res.json({
                 status: 'success',
@@ -338,7 +376,7 @@ class MaintenanceController {
             });
 
         } catch (error) {
-            logError('Erreur nettoyage cache:', error);
+            logger.error('Erreur nettoyage cache:', error);
             next(error);
         }
     }
@@ -369,7 +407,7 @@ class MaintenanceController {
             });
 
         } catch (error) {
-            logError('Erreur récupération stats cache:', error);
+            logger.error('Erreur récupération stats cache:', error);
             next(error);
         }
     }
@@ -439,7 +477,7 @@ class MaintenanceController {
             });
 
         } catch (error) {
-            logError('Erreur récupération jobs:', error);
+            logger.error('Erreur récupération jobs:', error);
             next(error);
         }
     }
@@ -450,7 +488,7 @@ class MaintenanceController {
      * @access ADMINISTRATEUR_PLATEFORME
      */
     async retryJob(req, res, next) {
-        const client = await pool.connect();
+        const client = await pool.getClient();
         try {
             await client.query('BEGIN');
 
@@ -482,7 +520,7 @@ class MaintenanceController {
 
             await client.query('COMMIT');
 
-            logInfo(`Tâche ${id} relancée par ${req.user.id}`);
+            logger.info(`Tâche ${id} relancée par ${req.user.id}`);
 
             res.json({
                 status: 'success',
@@ -491,7 +529,7 @@ class MaintenanceController {
 
         } catch (error) {
             await client.query('ROLLBACK');
-            logError('Erreur relance tâche:', error);
+            logger.error('Erreur relance tâche:', error);
             next(error);
         } finally {
             client.release();
@@ -504,7 +542,7 @@ class MaintenanceController {
      * @access ADMINISTRATEUR_PLATEFORME
      */
     async cancelJob(req, res, next) {
-        const client = await pool.connect();
+        const client = await pool.getClient();
         try {
             await client.query('BEGIN');
 
@@ -534,7 +572,7 @@ class MaintenanceController {
 
         } catch (error) {
             await client.query('ROLLBACK');
-            logError('Erreur annulation tâche:', error);
+            logger.error('Erreur annulation tâche:', error);
             next(error);
         } finally {
             client.release();
@@ -613,7 +651,7 @@ class MaintenanceController {
             });
 
         } catch (error) {
-            logError('Erreur récupération performances DB:', error);
+            logger.error('Erreur récupération performances DB:', error);
             next(error);
         }
     }
@@ -678,7 +716,7 @@ class MaintenanceController {
 
             await client.query('COMMIT');
 
-            logInfo(`Optimisation DB terminée: ${tablesToOptimize.length} tables traitées`);
+            logger.info(`Optimisation DB terminée: ${tablesToOptimize.length} tables traitées`);
 
             res.json({
                 status: 'success',
@@ -691,7 +729,7 @@ class MaintenanceController {
 
         } catch (error) {
             await client.query('ROLLBACK');
-            logError('Erreur optimisation DB:', error);
+            logger.error('Erreur optimisation DB:', error);
             next(error);
         } finally {
             client.release();
@@ -760,7 +798,7 @@ class MaintenanceController {
                 [backupDir, type, JSON.stringify(metadata), req.user.id]
             );
 
-            logInfo(`Backup créé: ${backupDir}`);
+            logger.info(`Backup créé: ${backupDir}`);
 
             res.json({
                 status: 'success',
@@ -772,7 +810,7 @@ class MaintenanceController {
             });
 
         } catch (error) {
-            logError('Erreur création backup:', error);
+            logger.error('Erreur création backup:', error);
             next(error);
         }
     }
@@ -817,7 +855,7 @@ class MaintenanceController {
             });
 
         } catch (error) {
-            logError('Erreur récupération backups:', error);
+            logger.error('Erreur récupération backups:', error);
             next(error);
         }
     }
@@ -828,7 +866,7 @@ class MaintenanceController {
      * @access ADMINISTRATEUR_PLATEFORME
      */
     async restoreBackup(req, res, next) {
-        const client = await pool.connect();
+        const client = await pool.getClient();
         try {
             await client.query('BEGIN');
 
@@ -892,7 +930,7 @@ class MaintenanceController {
                     [req.user.id, id]
                 );
 
-                logInfo(`Backup ${id} restauré avec succès`);
+                logger.info(`Backup ${id} restauré avec succès`);
 
             } finally {
                 // Désactiver le mode maintenance
@@ -917,7 +955,7 @@ class MaintenanceController {
         } catch (error) {
             await client.query('ROLLBACK');
             await this._setMaintenanceMode(false);
-            logError('Erreur restauration backup:', error);
+            logger.error('Erreur restauration backup:', error);
             next(error);
         } finally {
             client.release();
@@ -962,7 +1000,7 @@ class MaintenanceController {
                 }
             }
 
-            logInfo(`${deleted} anciennes sauvegardes nettoyées`);
+            logger.info(`${deleted} anciennes sauvegardes nettoyées`);
 
             res.json({
                 status: 'success',
@@ -974,7 +1012,7 @@ class MaintenanceController {
             });
 
         } catch (error) {
-            logError('Erreur nettoyage backups:', error);
+            logger.error('Erreur nettoyage backups:', error);
             next(error);
         }
     }
@@ -1044,7 +1082,7 @@ class MaintenanceController {
             });
 
         } catch (error) {
-            logError('Erreur récupération alertes:', error);
+            logger.error('Erreur récupération alertes:', error);
             next(error);
         }
     }
@@ -1055,7 +1093,7 @@ class MaintenanceController {
      * @access ADMINISTRATEUR_PLATEFORME
      */
     async resolveAlert(req, res, next) {
-        const client = await pool.connect();
+        const client = await pool.getClient();
         try {
             await client.query('BEGIN');
 
@@ -1086,7 +1124,7 @@ class MaintenanceController {
 
         } catch (error) {
             await client.query('ROLLBACK');
-            logError('Erreur résolution alerte:', error);
+            logger.error('Erreur résolution alerte:', error);
             next(error);
         } finally {
             client.release();
@@ -1123,7 +1161,7 @@ class MaintenanceController {
                 requested_by: req.user.id
             });
 
-            logInfo(`Tâche de maintenance ${taskName} planifiée (job ${jobId})`);
+            logger.info(`Tâche de maintenance ${taskName} planifiée (job ${jobId})`);
 
             res.json({
                 status: 'success',
@@ -1132,7 +1170,7 @@ class MaintenanceController {
             });
 
         } catch (error) {
-            logError('Erreur exécution tâche maintenance:', error);
+            logger.error('Erreur exécution tâche maintenance:', error);
             next(error);
         }
     }
@@ -1352,14 +1390,16 @@ class MaintenanceController {
     async _getRecentErrors(limit = 10) {
         const result = await pool.query(`
             SELECT 
-                timestamp,
-                level,
-                service,
-                message,
-                metadata
-            FROM system_logs
-            WHERE level = 'ERROR'
-            ORDER BY timestamp DESC
+                date_action as timestamp,
+                CASE WHEN succes = False THEN 'ERROR' ELSE 'INFO' END as level,
+                ressource_type as service,
+                action as message,
+                metadata,
+                adresse_ip as ip,
+                compte_id as user_id
+            FROM JOURNAL_AUDIT
+            WHERE succes = false
+            ORDER BY date_action DESC
             LIMIT $1
         `, [limit]);
 
@@ -1619,8 +1659,8 @@ class MaintenanceController {
      */
     async _cleanOldLogs(days = 30) {
         const result = await pool.query(
-            `DELETE FROM system_logs 
-             WHERE timestamp < NOW() - $1::interval
+            `DELETE FROM JOURNAL_AUDIT 
+             WHERE date_action < NOW() - $1::interval
              RETURNING id`,
             [`${days} days`]
         );

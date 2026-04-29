@@ -19,7 +19,8 @@ const MaintenanceController = require('../../controllers/admin/MaintenanceContro
 const ModerationController = require('../../controllers/admin/ModerationController');
 const RetentionController = require('../../controllers/admin/RetentionController');
 const UserManagementController = require('../../controllers/admin/UsersManagerController');
-
+const DemandeCreationController = require('../../controllers/admin/DemandeCreationController');
+const UploadMiddleware = require('../middlewares/upload.middleware');
 // ==================== AUTHENTIFICATION ET RÔLES ====================
 // Toutes les routes d'administration nécessitent une authentification
 // et le rôle ADMINISTRATEUR_PLATEFORME (sauf mention contraire)
@@ -774,17 +775,224 @@ router.get('/retention/history',
 /// ==================== VI. GESTION DES UTILISATEURS ====================
 // Gestion des utilisateurs, rôles, permissions, sessions
 
-router.get('/users', UserManagementController.getAllUsers);
-router.get('/users/stats', UserManagementController.getUserStats);
-router.get('/users/:id', UserManagementController.getUserById);
-router.post('/users', UserManagementController.createUser);
-router.put('/users/:id', UserManagementController.updateUser);
-router.post('/users/:id/change-password', UserManagementController.changeUserPassword);
-router.post('/users/:id/change-role', UserManagementController.changeUserRole);
-router.post('/users/:id/suspend', UserManagementController.suspendUser);
-router.post('/users/:id/activate', UserManagementController.activateUser);
-router.post('/users/:id/ban', UserManagementController.banUser);
-router.delete('/users/:id', UserManagementController.deleteUser);
-router.post('/users/:id/restore', UserManagementController.restoreUser);
+router.get('/users', authMiddleware.authenticate, UserManagementController.getAllUsers);
+router.get('/users/stats',authMiddleware.authenticate, UserManagementController.getUserStats);
+router.get('/users/:id', authMiddleware.authenticate, UserManagementController.getUserById);
+router.post('/users', authMiddleware.authenticate, UserManagementController.createUser);
+router.put('/users/:id',authMiddleware.authenticate, UserManagementController.updateUser);
+router.post('/users/:id/change-password', authMiddleware.authenticate, UserManagementController.changeUserPassword);
+router.post('/users/:id/change-role',authMiddleware.authenticate, UserManagementController.changeUserRole);
+router.post('/users/:id/suspend', authMiddleware.authenticate, UserManagementController.suspendUser);
+router.post('/users/:id/activate', authMiddleware.authenticate, UserManagementController.activateUser);
+router.post('/users/:id/ban', authMiddleware.authenticate, UserManagementController.banUser);
+router.delete('/users/:id', authMiddleware.authenticate, UserManagementController.deleteUser);
+router.post('/users/:id/restore', authMiddleware.authenticate, UserManagementController.restoreUser);
+
+
+// ==================== VII. DEMANDES DE CRÉATION ====================
+/**
+ * GET /api/v1/admin/demandes
+ * Récupérer toutes les demandes de création
+ */
+router.get('/demandes',
+    validationMiddleware.validate([
+        query('type_demande').optional().isIn(['RESTAURANT_FAST_FOOD', 'BOUTIQUE', 'COMPAGNIE_TRANSPORT']),
+        query('statut').optional().isIn(['BROUILLON', 'SOUMISE', 'EN_VALIDATION', 'VALIDATION_PLATEFORME', 'COMPLEMENT_INFO', 'APPROUVEE', 'REJETEE', 'ANNULEE', 'COMPLETEE']),
+        query('priorite').optional().isIn(['BASSE', 'NORMALE', 'HAUTE', 'URGENTE']),
+        query('page').optional().isInt({ min: 1 }),
+        query('limit').optional().isInt({ min: 1, max: 100 }),
+        query('date_debut').optional().isISO8601(),
+        query('date_fin').optional().isISO8601(),
+        query('demandeur_id').optional().isInt()
+    ]),
+    DemandeCreationController.getAllDemandes.bind(DemandeCreationController)
+);
+
+/**
+ * GET /api/v1/admin/demandes/stats
+ * Statistiques des demandes
+ */
+router.get('/demandes/stats',
+    cacheMiddleware.cache(600),
+    validationMiddleware.validate([
+        query('periode').optional().isIn(['7j', '30j'])
+    ]),
+    DemandeCreationController.getDemandeStats.bind(DemandeCreationController)
+);
+
+/**
+ * GET /api/v1/admin/demandes/:id
+ * Détail d'une demande
+ */
+router.get('/demandes/:id',
+    validationMiddleware.validate([
+        param('id').isInt()
+    ]),
+    DemandeCreationController.getDemandeById.bind(DemandeCreationController)
+);
+
+/**
+ * GET /api/v1/admin/demandes/:id/historique
+ * Historique d'une demande
+ */
+router.get('/demandes/:id/historique',
+    validationMiddleware.validate([
+        param('id').isInt()
+    ]),
+    DemandeCreationController.getHistorique.bind(DemandeCreationController)
+);
+
+/**
+ * GET /api/v1/admin/demandes/:id/pieces/:pieceId/download
+ * Télécharger une pièce jointe
+ */
+router.get('/demandes/:id/pieces/:pieceId/download',
+    authMiddleware.authenticate,
+    validationMiddleware.validate([
+        param('id').isInt(),
+        param('pieceId').isInt()
+    ]),
+    DemandeCreationController.downloadPiece.bind(DemandeCreationController)
+);
+
+/**
+ * POST /api/v1/admin/demandes
+ * Créer une demande (brouillon)
+ */
+router.post('/demandes',
+    authMiddleware.authenticate,
+    validationMiddleware.validate([
+        body('type_demande').isIn(['RESTAURANT_FAST_FOOD', 'BOUTIQUE', 'COMPAGNIE_TRANSPORT']),
+        body('nom_entite').notEmpty().trim().isLength({ min: 3, max: 255 }),
+        body('description_entite').optional().trim(),
+        body('logo_provisoire').optional().isURL(),
+        body('heures_ouverture').optional().matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/),
+        body('heures_fermeture').optional().matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/),
+        body('frais_livraison_proposes').optional().isDecimal({ min: 0 }),
+        body('temps_preparation_moyen').optional().isInt({ min: 1 }),
+        body('pourcentage_commission_souhaite').optional().isDecimal({ min: 0, max: 100 }),
+        body('adresse_texte').notEmpty().trim()
+    ]),
+    DemandeCreationController.createDemande.bind(DemandeCreationController)
+);
+
+/**
+ * PUT /api/v1/admin/demandes/:id
+ * Mettre à jour une demande
+ */
+router.put('/demandes/:id',
+    authMiddleware.authenticate,
+    validationMiddleware.validate([
+        param('id').isInt(),
+        body('nom_entite').optional().trim().isLength({ min: 3 }),
+        body('adresse_texte').optional().trim()
+    ]),
+    DemandeCreationController.updateDemande.bind(DemandeCreationController)
+);
+
+/**
+ * POST /api/v1/admin/demandes/:id/soumettre
+ * Soumettre une demande pour validation
+ */
+router.post('/demandes/:id/soumettre',
+    authMiddleware.authenticate,
+    validationMiddleware.validate([
+        param('id').isInt()
+    ]),
+    DemandeCreationController.soumettreDemande.bind(DemandeCreationController)
+);
+
+/**
+ * POST /api/v1/admin/demandes/:id/valider
+ * Valider une demande (admin)
+ */
+router.post('/demandes/:id/valider',
+    roleMiddleware.isAdmin(),
+    validationMiddleware.validate([
+        param('id').isInt(),
+        body('commentaire').optional().trim()
+    ]),
+    DemandeCreationController.validerDemande.bind(DemandeCreationController)
+);
+
+/**
+ * POST /api/v1/admin/demandes/:id/rejeter
+ * Rejeter une demande (admin)
+ */
+router.post('/demandes/:id/rejeter',
+    roleMiddleware.isAdmin(),
+    validationMiddleware.validate([
+        param('id').isInt(),
+        body('motif').notEmpty().trim()
+    ]),
+    DemandeCreationController.rejeterDemande.bind(DemandeCreationController)
+);
+
+/**
+ * POST /api/v1/admin/demandes/:id/complement
+ * Demander des compléments (admin)
+ */
+router.post('/demandes/:id/complement',
+    roleMiddleware.isAdmin(),
+    validationMiddleware.validate([
+        param('id').isInt(),
+        body('message').notEmpty().trim()
+    ]),
+    DemandeCreationController.demanderComplement.bind(DemandeCreationController)
+);
+
+/**
+ * POST /api/v1/admin/demandes/:id/complement/repondre
+ * Répondre à une demande de complément
+ */
+router.post('/demandes/:id/complement/repondre',
+    authMiddleware.authenticate,
+    validationMiddleware.validate([
+        param('id').isInt(),
+        body('reponse').notEmpty().trim()
+    ]),
+    DemandeCreationController.repondreComplement.bind(DemandeCreationController)
+);
+
+/**
+ * POST /api/v1/admin/demandes/:id/annuler
+ * Annuler une demande
+ */
+router.post('/demandes/:id/annuler',
+    authMiddleware.authenticate,
+    validationMiddleware.validate([
+        param('id').isInt(),
+        body('raison').optional().trim()
+    ]),
+    DemandeCreationController.annulerDemande.bind(DemandeCreationController)
+);
+
+/**
+ * POST /api/v1/admin/demandes/:id/pieces
+ * Ajouter une pièce jointe (multipart/form-data)
+ * Body: fichier (file), type_piece (optional)
+ */
+router.post('/demandes/:id/pieces',
+    authMiddleware.authenticate,
+    UploadMiddleware.single('fichier', { maxSize: 10 * 1024 * 1024 }), // 10MB max
+    validationMiddleware.validate([
+        param('id').isInt(),
+        body('type_piece').optional().isIn(['Kbis', 'CNI', 'CONTRAT', 'PHOTO', 'AUTRE'])
+    ]),
+    DemandeCreationController.uploadPiece.bind(DemandeCreationController)
+);
+
+/**
+ * DELETE /api/v1/admin/demandes/:id/pieces/:pieceId
+ * Supprimer une pièce jointe
+ */
+router.delete('/demandes/:id/pieces/:pieceId',
+    authMiddleware.authenticate,
+    validationMiddleware.validate([
+        param('id').isInt(),
+        param('pieceId').isInt()
+    ]),
+    DemandeCreationController.deletePiece.bind(DemandeCreationController)
+);
 
 module.exports = router;

@@ -4,7 +4,7 @@ const { AppError } = require('../../utils/errors/AppError');
 const { ValidationError } = require('../../utils/errors/AppError');
 const NotificationService = require('../../services/notification/NotificationService');
 const AuditService = require('../../services/audit/AuditService');
-const { logInfo, logError } = require('../../configuration/logger');
+const logger = require('../../configuration/logger');
 
 class ModerationController {
     /**
@@ -181,7 +181,7 @@ class ModerationController {
             });
 
         } catch (error) {
-            logError('Erreur récupération file modération:', error);
+            logger.error('Erreur récupération file modération:', error);
             next(error);
         }
     }
@@ -192,7 +192,7 @@ class ModerationController {
      * @access ADMINISTRATEUR_PLATEFORME, MODERATEUR
      */
     async modererArticle(req, res, next) {
-        const client = await pool.connect();
+        const client = await pool.getClient();
         try {
             await client.query('BEGIN');
 
@@ -240,7 +240,7 @@ class ModerationController {
 
             await client.query('COMMIT');
 
-            logInfo(`Article ${id} modéré: ${action} par ${req.user.id}`);
+            logger.info(`Article ${id} modéré: ${action} par ${req.user.id}`);
 
             res.json({
                 status: 'success',
@@ -262,7 +262,7 @@ class ModerationController {
      * @access ADMINISTRATEUR_PLATEFORME, MODERATEUR
      */
     async modererCommentaire(req, res, next) {
-        const client = await pool.connect();
+        const client = await pool.getClient();
         try {
             await client.query('BEGIN');
 
@@ -296,7 +296,7 @@ class ModerationController {
 
             // Notification à l'auteur
             if (comment.rows[0].auteur_id) {
-                await NotificationService.notifyUser(comment.rows[0].auteur_id, {
+                await NotificationService.send(comment.rows[0].auteur_id, {
                     type: 'COMMENTAIRE_MODERE',
                     titre: 'Commentaire modéré',
                     message: commentaire || 'Votre commentaire a été modéré',
@@ -313,7 +313,7 @@ class ModerationController {
 
         } catch (error) {
             await client.query('ROLLBACK');
-            logError('Erreur modération commentaire:', error);
+            logger.error('Erreur modération commentaire:', error);
             next(error);
         } finally {
             client.release();
@@ -326,7 +326,7 @@ class ModerationController {
      * @access ADMINISTRATEUR_PLATEFORME, MODERATEUR
      */
     async modererAvis(req, res, next) {
-        const client = await pool.connect();
+        const client = await pool.getClient();
         try {
             await client.query('BEGIN');
 
@@ -379,7 +379,7 @@ class ModerationController {
 
         } catch (error) {
             await client.query('ROLLBACK');
-            logError('Erreur modération avis:', error);
+            logger.error('Erreur modération avis:', error);
             next(error);
         } finally {
             client.release();
@@ -392,7 +392,7 @@ class ModerationController {
      * @access ADMINISTRATEUR_PLATEFORME, MODERATEUR
      */
     async traiterSignalement(req, res, next) {
-        const client = await pool.connect();
+        const client = await pool.getClient();
         try {
             await client.query('BEGIN');
 
@@ -468,7 +468,7 @@ class ModerationController {
 
         } catch (error) {
             await client.query('ROLLBACK');
-            logError('Erreur traitement signalement:', error);
+            logger.error('Erreur traitement signalement:', error);
             next(error);
         } finally {
             client.release();
@@ -526,7 +526,7 @@ class ModerationController {
             });
 
         } catch (error) {
-            logError('Erreur récupération stats modération:', error);
+            logger.error('Erreur récupération stats modération:', error);
             next(error);
         }
     }

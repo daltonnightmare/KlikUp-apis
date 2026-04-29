@@ -88,7 +88,7 @@ class SignalementController {
      * @route PATCH /api/v1/blog/signalements/articles/:id/traiter
      */
     async traiterSignalementArticle(req, res, next) {
-        const client = await db.pool.connect();
+        const client = await db.getClient();
         
         try {
             await client.query('BEGIN');
