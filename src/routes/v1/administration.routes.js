@@ -20,7 +20,9 @@ const ModerationController = require('../../controllers/admin/ModerationControll
 const RetentionController = require('../../controllers/admin/RetentionController');
 const UserManagementController = require('../../controllers/admin/UsersManagerController');
 const DemandeCreationController = require('../../controllers/admin/DemandeCreationController');
+
 const UploadMiddleware = require('../middlewares/upload.middleware');
+const CreationEntreprisePartenaireController =  require('../../controllers/admin/CreationEntreprisePartenaire');
 // ==================== AUTHENTIFICATION ET RÔLES ====================
 // Toutes les routes d'administration nécessitent une authentification
 // et le rôle ADMINISTRATEUR_PLATEFORME (sauf mention contraire)
@@ -994,5 +996,89 @@ router.delete('/demandes/:id/pieces/:pieceId',
     ]),
     DemandeCreationController.deletePiece.bind(DemandeCreationController)
 );
+
+/**
+ * POST /api/v1/admin/boutiques/create
+ * Créer une nouvelle boutique
+ * Headers: Authorization: Bearer <token>
+ * Body: {
+ *   nom_boutique, description_boutique?, types_produits_vendu?,
+ *   plateforme_id, pourcentage_commission_plateforme, configuration?
+ * }
+ * Files: logo?, favicon? (multipart/form-data)
+ * Auth: ADMIN
+ * Réponse: 201 { status, data }
+ */
+router.post('/boutiques/create',
+    authMiddleware.authenticate,
+    roleMiddleware.isAdmin(),
+    uploadMiddleware.fields([
+        { name: 'logo', maxCount: 1 },
+        { name: 'favicon', maxCount: 1 }
+    ]),
+    validationMiddleware.validate([
+        body('nom_boutique').notEmpty().trim().isLength({ min: 3, max: 255 }),
+        body('description_boutique').optional().trim(),
+        body('types_produits_vendu').optional().isArray(),
+        body('plateforme_id').isInt(),
+        body('pourcentage_commission_plateforme').isFloat({ min: 0, max: 100 }),
+        body('configuration').optional().isObject()
+    ]),
+    CreationEntreprisePartenaireController.createBoutique.bind(CreationEntreprisePartenaireController)
+);
+
+router.post('/restaurants/create', CreationEntreprisePartenaireController.createRestaurant.bind(CreationEntreprisePartenaireController));
+/**
+ * POST /api/v1/admin/transport/compagnies/create
+ * Créer une nouvelle compagnie de transport
+ * Body: {
+ *   nom_compagnie, description_compagnie, logo_compagnie,
+ *   pourcentage_commission_plateforme, plateforme_id
+ * }
+ * Auth: Bearer <token> + ADMIN
+ * Réponse: 201 { success, data: compagnie, message }
+ */
+router.post('/compagnies/create',
+    roleMiddleware.isAdmin(),
+    validationMiddleware.validate([
+        body('nom_compagnie').notEmpty().trim().isLength({ min: 2, max: 255 }),
+        body('description_compagnie').optional().trim(),
+        body('logo_compagnie').optional().isURL(),
+        body('pourcentage_commission_plateforme').optional().isFloat({ min: 0, max: 100 }),
+        body('plateforme_id').optional().isInt()
+    ]),
+    CreationEntreprisePartenaireController.createCompagnieTransport.bind(CreationEntreprisePartenaireController)
+);
+
+/**
+ * POST /api/v1/admin/livraison/entreprises/create
+ * Créer une nouvelle entreprise de livraison
+ * Headers: Authorization: Bearer <token>
+ * Body: {
+ *   nom_entreprise_livraison, description_entreprise_livraison?,
+ *   localisation_entreprise?, pourcentage_commission_plateforme?, plateforme_id=1
+ * }
+ * Files: logo?, favicon? (multipart/form-data)
+ * Auth: ADMIN
+ * Réponse: 201 { success, data, message }
+ */
+router.post('/entreprises/create',
+    authMiddleware.authenticate,
+    roleMiddleware.isAdmin(),
+    uploadMiddleware.fields([
+        { name: 'logo', maxCount: 1 },
+        { name: 'favicon', maxCount: 1 }
+    ]),
+    validationMiddleware.validate([
+        body('nom_entreprise_livraison').notEmpty().trim(),
+        body('description_entreprise_livraison').optional().trim(),
+        body('localisation_entreprise.lat').optional().isFloat({ min: -90, max: 90 }),
+        body('localisation_entreprise.lng').optional().isFloat({ min: -180, max: 180 }),
+        body('pourcentage_commission_plateforme').optional().isFloat({ min: 0, max: 100 }),
+        body('plateforme_id').optional().isInt()
+    ]),
+    CreationEntreprisePartenaireController.createEntrepriseLivraison.bind(CreationEntreprisePartenaireController)
+);
+
 
 module.exports = router;

@@ -41,35 +41,7 @@ const produitCreationLimiter = rateLimit({
 
 // ==================== I. BOUTIQUES ====================
 
-/**
- * POST /api/v1/boutiques
- * Créer une nouvelle boutique
- * Headers: Authorization: Bearer <token>
- * Body: {
- *   nom_boutique, description_boutique?, types_produits_vendu?,
- *   plateforme_id, pourcentage_commission_plateforme, configuration?
- * }
- * Files: logo?, favicon? (multipart/form-data)
- * Auth: ADMIN
- * Réponse: 201 { status, data }
- */
-router.post('/',
-    authMiddleware.authenticate,
-    roleMiddleware.isAdmin(),
-    uploadMiddleware.fields([
-        { name: 'logo', maxCount: 1 },
-        { name: 'favicon', maxCount: 1 }
-    ]),
-    validationMiddleware.validate([
-        body('nom_boutique').notEmpty().trim().isLength({ min: 3, max: 255 }),
-        body('description_boutique').optional().trim(),
-        body('types_produits_vendu').optional().isArray(),
-        body('plateforme_id').isInt(),
-        body('pourcentage_commission_plateforme').isFloat({ min: 0, max: 100 }),
-        body('configuration').optional().isObject()
-    ]),
-    BoutiqueController.create.bind(BoutiqueController)
-);
+
 
 /**
  * GET /api/v1/boutiques

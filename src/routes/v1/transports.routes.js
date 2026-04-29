@@ -102,27 +102,7 @@ router.get('/compagnies/:id/stats',
     CompagnieController.getStats.bind(CompagnieController)
 );
 
-/**
- * POST /api/v1/transport/compagnies
- * Créer une nouvelle compagnie de transport
- * Body: {
- *   nom_compagnie, description_compagnie, logo_compagnie,
- *   pourcentage_commission_plateforme, plateforme_id
- * }
- * Auth: Bearer <token> + ADMIN
- * Réponse: 201 { success, data: compagnie, message }
- */
-router.post('/compagnies',
-    roleMiddleware.isAdmin(),
-    validationMiddleware.validate([
-        body('nom_compagnie').notEmpty().trim().isLength({ min: 2, max: 255 }),
-        body('description_compagnie').optional().trim(),
-        body('logo_compagnie').optional().isURL(),
-        body('pourcentage_commission_plateforme').optional().isFloat({ min: 0, max: 100 }),
-        body('plateforme_id').optional().isInt()
-    ]),
-    CompagnieController.create.bind(CompagnieController)
-);
+
 
 /**
  * PUT /api/v1/transport/compagnies/:id

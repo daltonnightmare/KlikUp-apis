@@ -207,35 +207,6 @@ router.post('/demandes/:id/annuler',
 
 // ==================== II. ENTREPRISES DE LIVRAISON ====================
 
-/**
- * POST /api/v1/livraison/entreprises
- * Créer une nouvelle entreprise de livraison
- * Headers: Authorization: Bearer <token>
- * Body: {
- *   nom_entreprise_livraison, description_entreprise_livraison?,
- *   localisation_entreprise?, pourcentage_commission_plateforme?, plateforme_id=1
- * }
- * Files: logo?, favicon? (multipart/form-data)
- * Auth: ADMIN
- * Réponse: 201 { success, data, message }
- */
-router.post('/entreprises',
-    authMiddleware.authenticate,
-    roleMiddleware.isAdmin(),
-    uploadMiddleware.fields([
-        { name: 'logo', maxCount: 1 },
-        { name: 'favicon', maxCount: 1 }
-    ]),
-    validationMiddleware.validate([
-        body('nom_entreprise_livraison').notEmpty().trim(),
-        body('description_entreprise_livraison').optional().trim(),
-        body('localisation_entreprise.lat').optional().isFloat({ min: -90, max: 90 }),
-        body('localisation_entreprise.lng').optional().isFloat({ min: -180, max: 180 }),
-        body('pourcentage_commission_plateforme').optional().isFloat({ min: 0, max: 100 }),
-        body('plateforme_id').optional().isInt()
-    ]),
-    EntrepriseLivraisonController.create.bind(EntrepriseLivraisonController)
-);
 
 /**
  * GET /api/v1/livraison/entreprises
