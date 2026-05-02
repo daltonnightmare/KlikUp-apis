@@ -27,7 +27,8 @@ class FileService {
       path.join(this.uploadDir, 'avatars'),
       path.join(this.uploadDir, 'menus'),
       path.join(this.uploadDir, 'produits'),
-      path.join(this.uploadDir, 'articles')
+      path.join(this.uploadDir, 'articles'),
+      path.join(this.uploadDir, 'articles', 'gallery')
     ];
 
     for (const dir of dirs) {

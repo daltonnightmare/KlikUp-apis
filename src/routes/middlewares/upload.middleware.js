@@ -50,8 +50,9 @@ class UploadMiddleware {
      */
     get fileFilter() {
         return (req, file, cb) => {
-            // Images
-            if (file.fieldname === 'image' || file.fieldname.includes('photo')) {
+            // Images (incluant image_principale et image_secondaire)
+            if (file.fieldname === 'image' || file.fieldname.includes('photo') ||
+                file.fieldname === 'image_principale' || file.fieldname === 'image_secondaire') {
                 if (!file.mimetype.startsWith('image/')) {
                     return cb(new ValidationError('Le fichier doit être une image'), false);
                 }
@@ -76,7 +77,7 @@ class UploadMiddleware {
             storage: this.storage,
             fileFilter: this.fileFilter,
             limits: {
-                fileSize: options.maxSize || 5 * 1024 * 1024, // 5MB par défaut
+                fileSize: options.maxSize || 5 * 1024 * 1024,
                 files: 1
             }
         }).single(fieldName);
@@ -91,7 +92,6 @@ class UploadMiddleware {
                 }
                 if (err) return next(err);
                 
-                // Ajouter les informations du fichier à req.uploadedFile
                 if (req.file) {
                     req.uploadedFile = {
                         path: req.file.path,
@@ -134,7 +134,6 @@ class UploadMiddleware {
                 }
                 if (err) return next(err);
                 
-                // Ajouter les informations des fichiers
                 if (req.files && req.files.length > 0) {
                     req.uploadedFiles = req.files.map(file => ({
                         path: file.path,
@@ -152,14 +151,14 @@ class UploadMiddleware {
     }
 
     /**
-     * Upload avec différents champs
+     * ✅ UNIQUE MÉTHODE fields() - Version corrigée avec gestion des champs inattendus
      */
     fields(fieldConfig, options = {}) {
         const upload = multer({
             storage: this.storage,
             fileFilter: this.fileFilter,
             limits: {
-                fileSize: options.maxSize || 5 * 1024 * 1024,
+                fileSize: options.maxSize || 10 * 1024 * 1024,
                 files: options.maxFiles || 10
             }
         }).fields(fieldConfig);
@@ -167,6 +166,11 @@ class UploadMiddleware {
         return (req, res, next) => {
             upload(req, res, (err) => {
                 if (err instanceof multer.MulterError) {
+                    if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+                        // ✅ IGNORER au lieu de bloquer
+                        console.log(`⚠️ Champ de fichier ignoré: ${err.field}`);
+                        return next(); // CONTINUER SANS ERREUR
+                    }
                     return next(new ValidationError(err.message));
                 }
                 if (err) return next(err);
@@ -192,6 +196,19 @@ class UploadMiddleware {
     }
 
     /**
+     * ✅ Méthode spéciale pour l'upload des articles
+     */
+    articleUpload(options = {}) {
+        return this.fields([
+            { name: 'image_principale', maxCount: 1 },
+            { name: 'image_secondaire', maxCount: 1 }
+        ], {
+            maxSize: options.maxSize || 10 * 1024 * 1024,
+            maxFiles: 10
+        });
+    }
+
+    /**
      * Middleware pour les images (avec redimensionnement optionnel)
      */
     image(options = {}) {
@@ -205,7 +222,6 @@ class UploadMiddleware {
         const upload = this.single(fieldName, { maxSize });
 
         return async (req, res, next) => {
-            // Vérifier si requis
             if (required && !req.files && !req.file) {
                 return next(new ValidationError(`Image ${fieldName} requise`));
             }
@@ -215,7 +231,6 @@ class UploadMiddleware {
 
                 if (req.file && dimensions) {
                     try {
-                        // Redimensionner l'image
                         const sharp = require('sharp');
                         const imagePath = req.file.path;
                         const image = sharp(imagePath);
@@ -230,7 +245,6 @@ class UploadMiddleware {
                                 })
                                 .toFile(req.file.path.replace(/(\.[^.]+)$/, '_resized$1'));
                             
-                            // Remplacer par l'image redimensionnée
                             req.file.path = req.file.path.replace(/(\.[^.]+)$/, '_resized$1');
                         }
                     } catch (error) {
@@ -276,6 +290,8 @@ class UploadMiddleware {
      */
     async cleanupTempFiles() {
         const tempDir = this.uploadDirs.temp;
+        if (!fs.existsSync(tempDir)) return;
+        
         const files = fs.readdirSync(tempDir);
         const now = Date.now();
 
@@ -284,7 +300,6 @@ class UploadMiddleware {
             const stats = fs.statSync(filePath);
             const age = now - stats.mtimeMs;
 
-            // Supprimer les fichiers plus vieux que 24h
             if (age > 24 * 60 * 60 * 1000) {
                 fs.unlinkSync(filePath);
             }

@@ -23,7 +23,11 @@ const PartageController = require('../../controllers/blog/PartageController');
 const AbonnementBlogController = require('../../controllers/blog/AbonnementBlogController');
 const SignalementController = require('../../controllers/blog/SignalementController');
 const StatsBlogController = require('../../controllers/blog/StatsBlogController');
-
+const SondageController = require('../../controllers/blog/SondageController');
+const QuizController = require('../../controllers/blog/QuizzController');
+const FavoriController = require('../../controllers/blog/FavoriController');
+const RecommendationController = require('../../controllers/blog/RecommendationController');
+const BadgeController = require('../../controllers/blog/BadgeController');
 // ==================== CONFIGURATION RATE LIMITING ====================
 
 const commentLimiter = rateLimit({
@@ -77,7 +81,8 @@ router.post('/articles',
     roleMiddleware.isBlogger(),
     uploadMiddleware.fields([
         { name: 'image_principale', maxCount: 1 },
-        { name: 'image_secondaire', maxCount: 1 }
+        { name: 'image_secondaire', maxCount: 1 },
+        { name: 'gallery_images', maxCount: 10 },
     ]),
     validationMiddleware.validate([
         body('titre_article').notEmpty().trim().isLength({ min: 5, max: 255 }),
@@ -150,56 +155,6 @@ router.get('/articles',
     ArticleController.findAll.bind(ArticleController)
 );
 
-/**
- * GET /api/v1/blog/articles/populaires/top
- * Récupérer les articles populaires
- * Query: periode=7d, limit=10
- * Auth: PUBLIC
- * Cache: 1 heure
- * Réponse: { success, data, periode }
- */
-router.get('/articles/populaires/top',
-    cacheMiddleware.cache(3600), // 1 heure
-    validationMiddleware.validate([
-        query('periode').optional().isIn(['24h', '7d', '30d']),
-        query('limit').optional().isInt({ min: 1, max: 50 })
-    ]),
-    ArticleController.getPopularArticles.bind(ArticleController)
-);
-
-/**
- * GET /api/v1/blog/articles/categorie/:categorie
- * Récupérer les articles par catégorie
- * Params: categorie
- * Query: page=1, limit=20
- * Auth: PUBLIC
- * Réponse: { success, data, pagination }
- */
-router.get('/articles/categorie/:categorie',
-    validationMiddleware.validate([
-        param('categorie').notEmpty(),
-        query('page').optional().isInt({ min: 1 }),
-        query('limit').optional().isInt({ min: 1, max: 50 })
-    ]),
-    ArticleController.findByCategory.bind(ArticleController)
-);
-
-/**
- * GET /api/v1/blog/articles/auteur/:auteurId
- * Récupérer les articles par auteur
- * Params: auteurId
- * Query: page=1, limit=20
- * Auth: PUBLIC
- * Réponse: { success, data, pagination }
- */
-router.get('/articles/auteur/:auteurId',
-    validationMiddleware.validate([
-        param('auteurId').isInt(),
-        query('page').optional().isInt({ min: 1 }),
-        query('limit').optional().isInt({ min: 1, max: 50 })
-    ]),
-    ArticleController.findByAuthor.bind(ArticleController)
-);
 
 /**
  * GET /api/v1/blog/articles/:identifier
@@ -233,7 +188,8 @@ router.put('/articles/:id',
     authMiddleware.authenticate,
     uploadMiddleware.fields([
         { name: 'image_principale', maxCount: 1 },
-        { name: 'image_secondaire', maxCount: 1 }
+        { name: 'image_secondaire', maxCount: 1 },
+        { name: 'gallery_images', maxCount: 10 }
     ]),
     validationMiddleware.validate([
         param('id').isInt(),
@@ -338,49 +294,21 @@ router.delete('/articles/:id',
     ArticleController.delete.bind(ArticleController)
 );
 
-/**
- * POST /api/v1/blog/articles/search
- * Recherche avancée d'articles
- * Body: { query?, categories?, tags?, date_debut?, date_fin?, auteur_id?, note_min?, tri='pertinence' }
- * Query: page=1, limit=20
- * Auth: PUBLIC
- * Réponse: { success, data, pagination }
- */
-router.post('/articles/search',
-    validationMiddleware.validate([
-        body('query').optional().trim(),
-        body('categories').optional().isArray(),
-        body('tags').optional().isArray(),
-        body('date_debut').optional().isISO8601(),
-        body('date_fin').optional().isISO8601(),
-        body('auteur_id').optional().isInt(),
-        body('note_min').optional().isFloat({ min: 0, max: 5 }),
-        body('tri').optional().isIn(['pertinence', 'date_desc', 'date_asc', 'popularite']),
-        query('page').optional().isInt({ min: 1 }),
-        query('limit').optional().isInt({ min: 1, max: 50 })
-    ]),
-    ArticleController.search.bind(ArticleController)
-);
 
-/**
- * GET /api/v1/blog/articles/:id/stats
- * Récupérer les statistiques d'un article
- * Headers: Authorization: Bearer <token>
- * Params: id
- * Query: periode=30d
- * Auth: Auteur, ADMIN
- * Cache: 10 minutes
- * Réponse: { success, data }
- */
-router.get('/articles/:id/stats',
-    authMiddleware.authenticate,
-    cacheMiddleware.cache(600), // 10 minutes
-    validationMiddleware.validate([
-        param('id').isInt(),
-        query('periode').optional().isIn(['24h', '7d', '30d', '1y'])
-    ]),
-    ArticleController.getStats.bind(ArticleController)
-);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 // ==================== II. COMMENTAIRES ====================
 
@@ -461,25 +389,6 @@ router.delete('/commentaires/:id',
 );
 
 /**
- * POST /api/v1/blog/commentaires/:id/signaler
- * Signaler un commentaire
- * Headers: Authorization: Bearer <token>
- * Params: id
- * Body: { motif, description? }
- * Auth: PRIVATE
- * Réponse: 201 { success, data, message }
- */
-router.post('/commentaires/:id/signaler',
-    authMiddleware.authenticate,
-    validationMiddleware.validate([
-        param('id').isInt(),
-        body('motif').notEmpty().trim().isLength({ max: 255 }),
-        body('description').optional().trim().isLength({ max: 1000 })
-    ]),
-    CommentaireController.signaler.bind(CommentaireController)
-);
-
-/**
  * PATCH /api/v1/blog/commentaires/:id/moderer
  * Modérer un commentaire
  * Headers: Authorization: Bearer <token>
@@ -500,45 +409,43 @@ router.patch('/commentaires/:id/moderer',
     CommentaireController.moderer.bind(CommentaireController)
 );
 
-/**
- * GET /api/v1/blog/commentaires/signalements/en-attente
- * Récupérer les signalements en attente
- * Headers: Authorization: Bearer <token>
- * Query: page=1, limit=50
- * Auth: MODERATEUR, ADMIN
- * Réponse: { success, data, pagination }
- */
-router.get('/commentaires/signalements/en-attente',
+
+
+
+// Commentaires utilisateur
+router.get('/commentaires/user',
     authMiddleware.authenticate,
-    roleMiddleware.isModerator(),
-    roleMiddleware.isAdmin(),
-    validationMiddleware.validate([
-        query('page').optional().isInt({ min: 1 }),
-        query('limit').optional().isInt({ min: 1, max: 100 })
-    ]),
-    CommentaireController.getSignalementsEnAttente.bind(CommentaireController)
+    CommentaireController.getUserComments.bind(CommentaireController)
 );
 
-/**
- * PATCH /api/v1/blog/commentaires/signalements/:id/traiter
- * Traiter un signalement de commentaire
- * Headers: Authorization: Bearer <token>
- * Params: id
- * Body: { statut, action_entreprise? }
- * Auth: MODERATEUR, ADMIN
- * Réponse: { success, message }
- */
-router.patch('/commentaires/signalements/:id/traiter',
-    authMiddleware.authenticate,
-    //roleMiddleware.isModerator(),
-    roleMiddleware.isAdmin(),
-    validationMiddleware.validate([
-        param('id').isInt(),
-        body('statut').isIn(['TRAITE', 'REJETE']),
-        body('action_entreprise').optional().trim()
-    ]),
-    CommentaireController.traiterSignalement.bind(CommentaireController)
+// Commentaires les plus likés
+router.get('/articles/:articleId/commentaires/top',
+    CommentaireController.getTopComments.bind(CommentaireController)
 );
+
+// Nouveaux commentaires depuis une date
+router.get('/articles/:articleId/commentaires/nouveaux',
+    CommentaireController.getNewCommentsCount.bind(CommentaireController)
+);
+
+// Épingler un commentaire
+router.patch('/commentaires/:id/epingler',
+    authMiddleware.authenticate,
+    CommentaireController.togglePinComment.bind(CommentaireController)
+);
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 // ==================== III. LIKES ====================
 
@@ -600,6 +507,51 @@ router.post('/commentaires/:commentaireId/like',
     LikeController.toggleCommentaireLike.bind(LikeController)
 );
 
+
+// ✅ Statut de like
+router.get('/articles/:articleId/like-status',
+    authMiddleware.authenticate,
+    LikeController.getArticleLikeStatus.bind(LikeController)
+);
+
+router.get('/commentaires/:commentaireId/like-status',
+    authMiddleware.authenticate,
+    LikeController.getCommentaireLikeStatus.bind(LikeController)
+);
+
+// ✅ Batch status
+router.post('/likes/batch-status',
+    authMiddleware.authenticate,
+    LikeController.getBatchArticleLikeStatus.bind(LikeController)
+);
+
+router.post('/likes/batch-comment-status',
+    authMiddleware.authenticate,
+    LikeController.getBatchCommentaireLikeStatus.bind(LikeController)
+);
+
+// ✅ Stats de likes
+router.get('/articles/:articleId/likes/stats',
+    LikeController.getArticleLikeStats.bind(LikeController)
+);
+
+// ✅ Likes utilisateur
+router.get('/likes/user',
+    authMiddleware.authenticate,
+    LikeController.getUserLikes.bind(LikeController)
+);
+
+
+
+
+
+
+
+
+
+
+
+
 // ==================== IV. PARTAGES ====================
 
 /**
@@ -636,24 +588,78 @@ router.get('/articles/:articleId/partages/stats',
     PartageController.getShareStats.bind(PartageController)
 );
 
+
+// Enregistrer un partage
+router.post('/articles/:articleId/partager',
+    authMiddleware.optionalAuthenticate,
+    validationMiddleware.validate([
+        param('articleId').isInt(),
+        body('type_partage').isIn([
+            'FACEBOOK', 'TWITTER', 'LINKEDIN', 'WHATSAPP', 'TELEGRAM',
+            'EMAIL', 'COPY_LINK', 'INSTAGRAM', 'TIKTOK', 'NATIVE_SHARE',
+            'SMS', 'MESSENGER', 'SNAPCHAT', 'REDDIT', 'PINTEREST'
+        ]),
+        body('message_personnel').optional().isString().isLength({ max: 500 })
+    ]),
+    PartageController.share.bind(PartageController)
+);
+
+// Statistiques d'un article
+router.get('/articles/:articleId/partages/stats',
+    validationMiddleware.validate([
+        param('articleId').isInt(),
+        query('periode').optional().isIn(['24h', '7d', '30d'])
+    ]),
+    PartageController.getShareStats.bind(PartageController)
+);
+
+// Statistiques globales
+router.get('/partages/stats/globales',
+    validationMiddleware.validate([
+        query('periode').optional().isIn(['24h', '7d', '30d'])
+    ]),
+    PartageController.getGlobalStats.bind(PartageController)
+);
+
+// Historique utilisateur
+router.get('/partages/historique',
+    authMiddleware.authenticate,
+    PartageController.getMyShareHistory.bind(PartageController)
+);
+
+// Batch check
+router.post('/partages/check-batch',
+    validationMiddleware.validate([
+        body('article_ids').isArray({ min: 1, max: 100 })
+    ]),
+    PartageController.checkBatchPartages.bind(PartageController)
+);
+
+// Top articles partagés
+router.get('/partages/top',
+    validationMiddleware.validate([
+        query('periode').optional().isIn(['24h', '7d', '30d']),
+        query('limit').optional().isInt({ min: 1, max: 50 }),
+        query('categorie').optional().isString()
+    ]),
+    PartageController.getTopSharedArticles.bind(PartageController)
+);
+
+
+
+
+
+
+
+
+
+
+
+
+
 // ==================== V. ABONNEMENTS ====================
 
-/**
- * POST /api/v1/blog/abonnements
- * S'abonner à une catégorie, un auteur ou un tag
- * Headers: Authorization: Bearer <token>
- * Body: { type_abonnement: 'CATEGORIE'|'AUTEUR'|'TAG', reference_id }
- * Auth: PRIVATE
- * Réponse: 201 { success, data, message }
- */
-router.post('/abonnements',
-    authMiddleware.authenticate,
-    validationMiddleware.validate([
-        body('type_abonnement').isIn(['CATEGORIE', 'AUTEUR', 'TAG']),
-        body('reference_id').notEmpty()
-    ]),
-    AbonnementBlogController.subscribe.bind(AbonnementBlogController)
-);
+
 
 /**
  * GET /api/v1/blog/abonnements/mes-abonnements
@@ -704,6 +710,39 @@ router.delete('/abonnements/:id',
     ]),
     AbonnementBlogController.unsubscribe.bind(AbonnementBlogController)
 );
+
+
+// Suppression définitive
+router.delete('/abonnements/:id/permanent',
+    authMiddleware.authenticate,
+    AbonnementBlogController.deletePermanent.bind(AbonnementBlogController)
+);
+
+// Statistiques
+router.get('/abonnements/stats',
+    authMiddleware.authenticate,
+    AbonnementBlogController.getAbonnementStats.bind(AbonnementBlogController)
+);
+
+// Vérification statut
+router.get('/abonnements/check',
+    authMiddleware.authenticate,
+    AbonnementBlogController.checkSubscription.bind(AbonnementBlogController)
+);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 // ==================== VI. SIGNALEMENTS ====================
 
@@ -765,6 +804,60 @@ router.patch('/signalements/articles/:id/traiter',
     SignalementController.traiterSignalementArticle.bind(SignalementController)
 );
 
+// Signalement commentaire
+router.post('/commentaires/:commentaireId/signaler',
+    authMiddleware.authenticate,
+    SignalementController.signalerCommentaire.bind(SignalementController)
+);
+
+// Traitement signalement commentaire
+router.patch('/signalements/commentaires/:id/traiter',
+    authMiddleware.authenticate,
+    roleMiddleware.isAdmin(),
+    SignalementController.traiterSignalementCommentaire.bind(SignalementController)
+);
+
+// Historique utilisateur
+router.get('/signalements/user',
+    authMiddleware.authenticate,
+    SignalementController.getUserSignalements.bind(SignalementController)
+);
+// Traitement par lot
+router.post('/signalements/traiter-batch',
+    authMiddleware.authenticate,
+    roleMiddleware.isAdmin(),
+    validationMiddleware.validate([
+        body('signalement_ids').isArray({ min: 1, max: 50 }),
+        body('action_entreprise').optional().isString(),
+        body('statut').optional().isIn(['TRAITE', 'REJETE'])
+    ]),
+    SignalementController.traiterBatch.bind(SignalementController)
+);
+
+// Statistiques
+router.get('/signalements/stats',
+    authMiddleware.authenticate,
+    roleMiddleware.isAdmin(),
+    validationMiddleware.validate([
+        query('periode').optional().isIn(['24h', '7d', '30d'])
+    ]),
+    SignalementController.getSignalementStats.bind(SignalementController)
+);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // ==================== VII. STATISTIQUES DU BLOG ====================
 
 /**
@@ -820,6 +913,543 @@ router.get('/stats/lecture',
         query('article_id').optional().isInt()
     ]),
     StatsBlogController.getReadingStats.bind(StatsBlogController)
+);
+
+
+// Dashboard auteur
+router.get('/stats/dashboard',
+    authMiddleware.authenticate,
+    StatsBlogController.getDashboardAuteur.bind(StatsBlogController)
+);
+
+// Stats engagement
+router.get('/stats/engagement',
+    authMiddleware.authenticate,
+    roleMiddleware.isAdmin(),
+    StatsBlogController.getEngagementStats.bind(StatsBlogController)
+);
+
+// Stats quiz
+router.get('/stats/quiz',
+    authMiddleware.authenticate,
+    roleMiddleware.isAdmin(),
+    StatsBlogController.getQuizStats.bind(StatsBlogController)
+);
+
+// Stats badges
+router.get('/stats/badges',
+    StatsBlogController.getBadgeStats.bind(StatsBlogController)
+);
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ==================== VIII. SONDAGES ET QUIZZ ====================
+
+
+// Créer un sondage
+router.post('/articles/:articleId/sondages',
+    authMiddleware.authenticate,
+    validationMiddleware.validate([
+        param('articleId').isInt(),
+        body('question').notEmpty().isLength({ min: 10, max: 500 }),
+        body('type_sondage').isIn(['UNIQUE', 'MULTIPLE', 'CLASSEMENT', 'NOTE']),
+        body('options').isArray({ min: 2, max: 10 })
+    ]),
+    SondageController.create.bind(SondageController)
+);
+
+// Mettre à jour un sondage
+router.put('/sondages/:id',
+    authMiddleware.authenticate,
+    validationMiddleware.validate([param('id').isInt()]),
+    SondageController.update.bind(SondageController)
+);
+
+// Supprimer un sondage
+router.delete('/sondages/:id',
+    authMiddleware.authenticate,
+    roleMiddleware.isAdmin(),
+    SondageController.delete.bind(SondageController)
+);
+
+// Voter
+router.post('/sondages/:id/voter',
+    authMiddleware.authenticate,
+    validationMiddleware.validate([
+        param('id').isInt(),
+        body('option_ids').notEmpty()
+    ]),
+    SondageController.voter.bind(SondageController)
+);
+
+// Annuler son vote
+router.delete('/sondages/:id/voter',
+    authMiddleware.authenticate,
+    SondageController.annulerVote.bind(SondageController)
+);
+
+// Récupérer les sondages d'un article
+router.get('/articles/:articleId/sondages',
+    authMiddleware.optionalAuthenticate,
+    SondageController.getByArticle.bind(SondageController)
+);
+
+// Résultats détaillés
+router.get('/sondages/:id/resultats',
+    authMiddleware.optionalAuthenticate,
+    SondageController.getResultats.bind(SondageController)
+);
+
+// Sondages tendances
+router.get('/sondages/tendances',
+    SondageController.getTendances.bind(SondageController)
+);
+
+// Historique des votes utilisateur
+router.get('/sondages/mes-votes',
+    authMiddleware.authenticate,
+    SondageController.getMesVotes.bind(SondageController)
+);
+
+// Créer un quiz
+router.post('/articles/:articleId/quiz',
+    authMiddleware.authenticate,
+    validationMiddleware.validate([
+        param('articleId').isInt(),
+        body('question').notEmpty().isLength({ min: 10, max: 500 }),
+        body('type_quiz').isIn(['QCM', 'VRAI_FAUX', 'REPONSE_COURTE']),
+        body('options').isArray({ min: 2 }).optional()
+    ]),
+    QuizController.create.bind(QuizController)
+);
+
+// Mettre à jour un quiz
+router.put('/quiz/:id',
+    authMiddleware.authenticate,
+    validationMiddleware.validate([
+        param('id').isInt()
+    ]),
+    QuizController.update.bind(QuizController)
+);
+
+// Supprimer un quiz
+router.delete('/quiz/:id',
+    authMiddleware.authenticate,
+    roleMiddleware.isAdmin(),
+    QuizController.delete.bind(QuizController)
+);
+
+// Répondre à un quiz
+router.post('/quiz/:id/repondre',
+    authMiddleware.authenticate,
+    validationMiddleware.validate([
+        param('id').isInt(),
+        body('option_id').optional().isInt(),
+        body('reponse_texte').optional().isString(),
+        body('temps_reponse_secondes').optional().isInt({ min: 0 })
+    ]),
+    QuizController.repondre.bind(QuizController)
+);
+
+// Récupérer les quiz d'un article
+router.get('/articles/:articleId/quiz',
+    authMiddleware.optionalAuthenticate,
+    QuizController.getByArticle.bind(QuizController)
+);
+
+// Scores d'un article
+router.get('/articles/:articleId/quiz/scores',
+    authMiddleware.optionalAuthenticate,
+    QuizController.getScoresByArticle.bind(QuizController)
+);
+
+// Mes scores
+router.get('/quiz/mes-scores',
+    authMiddleware.authenticate,
+    QuizController.getMyScores.bind(QuizController)
+);
+
+// Statistiques d'un quiz
+router.get('/quiz/:id/stats',
+    QuizController.getQuizStats.bind(QuizController)
+);
+
+// Vérifier les badges
+router.post('/quiz/verifier-badges',
+    authMiddleware.authenticate,
+    QuizController.verifierBadges.bind(QuizController)
+);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ==================== FAVORIS ====================
+
+// Ajouter/Retirer des favoris
+router.post('/articles/:articleId/favori',
+    authMiddleware.authenticate,
+    validationMiddleware.validate([param('articleId').isInt()]),
+    FavoriController.toggleFavori.bind(FavoriController)
+);
+
+// Récupérer mes favoris
+router.get('/favoris',
+    authMiddleware.authenticate,
+    validationMiddleware.validate([
+        query('page').optional().isInt({ min: 1 }),
+        query('limit').optional().isInt({ min: 1, max: 50 }),
+        query('tri').optional().isIn(['date_ajout', 'date_publication', 'titre', 'lecture']),
+        query('collection_id').optional().isInt(),
+        query('categorie').optional().isString()
+    ]),
+    FavoriController.getMesFavoris.bind(FavoriController)
+);
+
+// Vérifier si un article est en favoris
+router.get('/articles/:articleId/favori/check',
+    authMiddleware.optionalAuthenticate,
+    FavoriController.checkFavori.bind(FavoriController)
+);
+
+// Vérifier le statut favori pour plusieurs articles
+router.post('/favoris/check-batch',
+    authMiddleware.optionalAuthenticate,
+    validationMiddleware.validate([
+        body('article_ids').isArray({ min: 1, max: 100 })
+    ]),
+    FavoriController.checkBatchFavoris.bind(FavoriController)
+);
+
+// Statistiques des favoris
+router.get('/favoris/stats',
+    authMiddleware.authenticate,
+    FavoriController.getFavorisStats.bind(FavoriController)
+);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ==================== SIGNETS ====================
+
+// Sauvegarder un signet
+router.post('/articles/:articleId/signets',
+    authMiddleware.authenticate,
+    validationMiddleware.validate([
+        param('articleId').isInt(),
+        body('pourcentage').optional().isFloat({ min: 0, max: 100 }),
+        body('titre_signet').optional().isString().isLength({ max: 255 }),
+        body('note_signet').optional().isString().isLength({ max: 500 })
+    ]),
+    FavoriController.saveSignet.bind(FavoriController)
+);
+
+// Récupérer le signet d'un article
+router.get('/articles/:articleId/signets',
+    authMiddleware.authenticate,
+    FavoriController.getSignet.bind(FavoriController)
+);
+
+// Récupérer tous les signets
+router.get('/signets',
+    authMiddleware.authenticate,
+    FavoriController.getAllSignets.bind(FavoriController)
+);
+
+// Supprimer un signet
+router.delete('/articles/:articleId/signets',
+    authMiddleware.authenticate,
+    FavoriController.deleteSignet.bind(FavoriController)
+);
+
+// ==================== NOTES DE LECTURE ====================
+
+// Ajouter une note
+router.post('/articles/:articleId/notes',
+    authMiddleware.authenticate,
+    validationMiddleware.validate([
+        param('articleId').isInt(),
+        body('contenu_note').notEmpty().isLength({ min: 1, max: 5000 }),
+        body('est_privee').optional().isBoolean(),
+        body('couleur_surlignage').optional().isString().isLength({ max: 7 })
+    ]),
+    FavoriController.addNote.bind(FavoriController)
+);
+
+// Récupérer les notes d'un article
+router.get('/articles/:articleId/notes',
+    authMiddleware.optionalAuthenticate,
+    FavoriController.getNotes.bind(FavoriController)
+);
+
+// Mettre à jour une note
+router.put('/notes/:id',
+    authMiddleware.authenticate,
+    FavoriController.updateNote.bind(FavoriController)
+);
+
+// Supprimer une note
+router.delete('/notes/:id',
+    authMiddleware.authenticate,
+    FavoriController.deleteNote.bind(FavoriController)
+);
+
+// Récupérer toutes mes notes
+router.get('/notes',
+    authMiddleware.authenticate,
+    FavoriController.getAllNotes.bind(FavoriController)
+);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ==================== PROGRESSION ====================
+
+// Sauvegarder la progression
+router.post('/articles/:articleId/progression',
+    authMiddleware.optionalAuthenticate,
+    validationMiddleware.validate([
+        param('articleId').isInt(),
+        body('pourcentage').optional().isFloat({ min: 0, max: 100 }),
+        body('temps_passe_secondes').optional().isInt({ min: 0 }),
+        body('scroll_position').optional().isInt({ min: 0 })
+    ]),
+    FavoriController.saveProgression.bind(FavoriController)
+);
+
+// Récupérer la progression
+router.get('/articles/:articleId/progression',
+    authMiddleware.optionalAuthenticate,
+    FavoriController.getProgression.bind(FavoriController)
+);
+
+// Historique de lecture
+router.get('/lecture/historique',
+    authMiddleware.authenticate,
+    FavoriController.getHistoriqueLecture.bind(FavoriController)
+);
+
+
+
+// Recommandations personnalisées
+router.get('/recommandations',
+    authMiddleware.optionalAuthenticate,
+    RecommendationController.getRecommandations.bind(RecommendationController)
+);
+
+// Articles similaires
+router.get('/articles/:articleId/similaires',
+    RecommendationController.getSimilarArticles.bind(RecommendationController)
+);
+
+// Tendances
+router.get('/recommandations/tendances',
+    RecommendationController.getTendances.bind(RecommendationController)
+);
+
+// Découvrir
+router.get('/recommandations/decouvrir',
+    authMiddleware.optionalAuthenticate,
+    RecommendationController.getDecouvrir.bind(RecommendationController)
+);
+
+// Par auteur
+router.get('/recommandations/auteur/:auteurId',
+    RecommendationController.getByAuthor.bind(RecommendationController)
+);
+
+// Feed personnalisé
+router.get('/feed',
+    authMiddleware.optionalAuthenticate,
+    RecommendationController.getFeed.bind(RecommendationController)
+);
+
+// Préférences
+router.get('/recommandations/preferences',
+    authMiddleware.authenticate,
+    RecommendationController.getPreferences.bind(RecommendationController)
+);
+
+router.put('/recommandations/preferences',
+    authMiddleware.authenticate,
+    RecommendationController.updatePreferences.bind(RecommendationController)
+);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ==================== BADGES ====================
+
+// Admin - CRUD badges
+router.post('/badges',
+    authMiddleware.authenticate,
+    roleMiddleware.isAdmin(),
+    BadgeController.create.bind(BadgeController)
+);
+
+router.put('/badges/:id',
+    authMiddleware.authenticate,
+    roleMiddleware.isAdmin(),
+    BadgeController.update.bind(BadgeController)
+);
+
+router.delete('/badges/:id',
+    authMiddleware.authenticate,
+    roleMiddleware.isAdmin(),
+    BadgeController.delete.bind(BadgeController)
+);
+
+// Tous les badges disponibles
+router.get('/badges',
+    authMiddleware.optionalAuthenticate,
+    BadgeController.getAllBadges.bind(BadgeController)
+);
+
+// Mes badges
+router.get('/badges/mes-badges',
+    authMiddleware.authenticate,
+    BadgeController.getMyBadges.bind(BadgeController)
+);
+
+// Classement
+router.get('/badges/classement',
+    authMiddleware.optionalAuthenticate,
+    BadgeController.getClassement.bind(BadgeController)
+);
+
+// Vérifier les badges
+router.post('/badges/verifier',
+    authMiddleware.authenticate,
+    BadgeController.verifierBadges.bind(BadgeController)
+);
+
+// Stats globales
+router.get('/badges/stats',
+    BadgeController.getStats.bind(BadgeController)
+);
+
+// Partager un badge
+router.post('/badges/:id/partager',
+    authMiddleware.authenticate,
+    BadgeController.partagerBadge.bind(BadgeController)
+);
+
+//===================BADGE========================
+
+// Admin - CRUD badges
+router.post('/badges',
+    authMiddleware.authenticate,
+    roleMiddleware.isAdmin(),
+    BadgeController.create.bind(BadgeController)
+);
+
+router.put('/badges/:id',
+    authMiddleware.authenticate,
+    roleMiddleware.isAdmin(),
+    BadgeController.update.bind(BadgeController)
+);
+
+router.delete('/badges/:id',
+    authMiddleware.authenticate,
+    roleMiddleware.isAdmin(),
+    BadgeController.delete.bind(BadgeController)
+);
+
+// Tous les badges disponibles
+router.get('/badges',
+    authMiddleware.optionalAuthenticate,
+    BadgeController.getAllBadges.bind(BadgeController)
+);
+
+// Mes badges
+router.get('/badges/mes-badges',
+    authMiddleware.authenticate,
+    BadgeController.getMyBadges.bind(BadgeController)
+);
+
+// Classement
+router.get('/badges/classement',
+    authMiddleware.optionalAuthenticate,
+    BadgeController.getClassement.bind(BadgeController)
+);
+
+// Vérifier les badges
+router.post('/badges/verifier',
+    authMiddleware.authenticate,
+    BadgeController.verifierBadges.bind(BadgeController)
+);
+
+// Stats globales
+router.get('/badges/stats',
+    BadgeController.getStats.bind(BadgeController)
+);
+
+// Partager un badge
+router.post('/badges/:id/partager',
+    authMiddleware.authenticate,
+    BadgeController.partagerBadge.bind(BadgeController)
 );
 
 module.exports = router;

@@ -15,6 +15,7 @@ class CreationEntreprisePartenaire {
      * POST /api/v1/admin/restaurants/create
      */
     async createRestaurant(req, res, next) {
+        logger.info('Début de la création de restaurant', { body: req.body, userId: req.user.id });
         const client = await db.getClient();
         try {
             await client.query('BEGIN');
@@ -24,8 +25,12 @@ class CreationEntreprisePartenaire {
                 description_restaurant_fast_food,
                 logo_restaurant,
                 pourcentage_commission_plateforme,
-                plateforme_id
+                plateforme_id,
+                
             } = req.body;
+
+            // Validation des champs
+
 
             const existing = await client.query(
                 `SELECT id FROM RESTAURANTSFASTFOOD WHERE nom_restaurant_fast_food = $1`,
@@ -63,6 +68,8 @@ class CreationEntreprisePartenaire {
 
             const newRestaurant = result.rows[0];
 
+            // Journaliser l'action de création
+
             await AuditService.log({
                 action: 'CREATE',
                 ressource_type: 'RESTAURANTSFASTFOOD',
@@ -73,6 +80,13 @@ class CreationEntreprisePartenaire {
                 session_id: req.sessionId
             });
 
+            await NotificationService.notifyAdmins({
+                type: 'NOUVEAU_RESTAURANT',
+                titre: 'Nouveau restaurant créé',
+                message: `Le restaurant "${nom_restaurant_fast_food}" a été créé`,
+                donnees: { restaurant_id: newRestaurant.id }
+            });
+           
             await client.query('COMMIT');
 
             res.status(201).json({
@@ -96,6 +110,7 @@ class CreationEntreprisePartenaire {
      * @access ADMINISTRATEUR_PLATEFORME, ADMINISTRATEUR_COMPAGNIE
      */
     async createBoutique(req, res, next) {
+        logger.info('Début de la création de boutique', { body: req.body, userId: req.user.id });
         const client = await db.getClient();
         try {
             await client.query('BEGIN');
@@ -188,6 +203,9 @@ class CreationEntreprisePartenaire {
                 utilisateur_id: req.user.id,
                 adresse_ip: req.ip
             });
+            
+
+
 
             await client.query('COMMIT');
 
@@ -216,7 +234,7 @@ class CreationEntreprisePartenaire {
 
     /**
      * Créer une nouvelle compagnie
-     * POST /api/v1/admin/transport/compagnies
+     * POST /api/v1/admin/transport/compagnies/create
      */
     async createCompagnieTransport(req, res, next) {
         const client = await db.getClient();
@@ -284,7 +302,7 @@ class CreationEntreprisePartenaire {
 
     /**
      * Créer une nouvelle entreprise de livraison
-     * @route POST /api/v1/admin/livraison/entreprises
+     * @route POST /api/v1/admin/livraison/entreprises/create
      */
     async createEntrepriseLivraison(req, res, next) {
         const client = await db.pool.connect();

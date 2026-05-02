@@ -118,24 +118,6 @@ router.get('/restaurants/:id/stats',
     RestaurantController.getStats.bind(RestaurantController)
 );
 
-/**
- * POST /api/v1/restauration/restaurants
- * Créer un nouveau restaurant
- * Body: { nom_restaurant_fast_food, description_restaurant_fast_food?, logo_restaurant?, pourcentage_commission_plateforme?, plateforme_id? }
- * Auth: Bearer <token> + ADMIN
- * Réponse: 201 { success, data: restaurant, message }
- */
-router.post('/restaurants',
-    roleMiddleware.isAdmin(),
-    validationMiddleware.validate([
-        body('nom_restaurant_fast_food').notEmpty().trim().isLength({ min: 2, max: 255 }),
-        body('description_restaurant_fast_food').optional().trim(),
-        body('logo_restaurant').optional().isURL(),
-        body('pourcentage_commission_plateforme').optional().isFloat({ min: 0, max: 100 }),
-        body('plateforme_id').optional().isInt()
-    ]),
-    RestaurantController.create.bind(RestaurantController)
-);
 
 /**
  * PUT /api/v1/restauration/restaurants/:id

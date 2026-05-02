@@ -2959,3 +2959,539 @@ CREATE TABLE DEMANDES_NOTIFICATIONS (
 );
 
 CREATE INDEX idx_demandes_notif_destinataire ON DEMANDES_NOTIFICATIONS(destinataire_id, est_lue);
+
+
+
+-- =============================================================================
+-- AMÉLIORATION : ARTICLES INTERACTIFS
+-- =============================================================================
+
+-- Ajouter de nouvelles colonnes à ARTICLES_BLOG_PLATEFORME
+ALTER TABLE ARTICLES_BLOG_PLATEFORME
+    -- ⭐ NOTES & ÉVALUATIONS
+    ADD COLUMN IF NOT EXISTS note_moyenne DECIMAL(3,2) DEFAULT 0.00 
+        CHECK (note_moyenne BETWEEN 0 AND 5),
+    ADD COLUMN IF NOT EXISTS nombre_notes INTEGER DEFAULT 0 
+        CHECK (nombre_notes >= 0),
+    
+    -- 📊 ENGAGEMENT
+    ADD COLUMN IF NOT EXISTS temps_lecture_moyen INTEGER DEFAULT 0 
+        CHECK (temps_lecture_moyen >= 0),  -- en secondes
+    ADD COLUMN IF NOT EXISTS taux_completion DECIMAL(5,2) DEFAULT 0.00 
+        CHECK (taux_completion BETWEEN 0 AND 100),  -- % de lecture complète
+    
+    -- 🏷️ CATÉGORISATION AVANCÉE
+    ADD COLUMN IF NOT EXISTS niveau_difficulte VARCHAR(20) DEFAULT 'DEBUTANT'
+        CHECK (niveau_difficulte IN ('DEBUTANT', 'INTERMEDIAIRE', 'AVANCE', 'EXPERT')),
+    ADD COLUMN IF NOT EXISTS duree_estimee VARCHAR(10),  -- "5 min", "15 min", "1h"
+    
+    -- 🎯 INTERACTIONS
+    ADD COLUMN IF NOT EXISTS contient_quiz BOOLEAN DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS contient_sondage BOOLEAN DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS contient_video BOOLEAN DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS contient_audio BOOLEAN DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS contient_infographie BOOLEAN DEFAULT FALSE,
+    
+    -- 📱 MULTIMÉDIA
+    ADD COLUMN IF NOT EXISTS audio_url VARCHAR(500),
+    ADD COLUMN IF NOT EXISTS infographie_url VARCHAR(500),
+    ADD COLUMN IF NOT EXISTS embed_code TEXT,  -- Code d'intégration (YouTube, SoundCloud, etc.)
+    
+    -- 🔖 SAUVEGARDE
+    ADD COLUMN IF NOT EXISTS nombre_favoris INTEGER DEFAULT 0 
+        CHECK (nombre_favoris >= 0),
+    ADD COLUMN IF NOT EXISTS nombre_telechargements INTEGER DEFAULT 0 
+        CHECK (nombre_telechargements >= 0),
+    
+    -- 📈 ANALYTIQUES AVANCÉES
+    ADD COLUMN IF NOT EXISTS taux_rebond DECIMAL(5,2) DEFAULT 0.00 
+        CHECK (taux_rebond BETWEEN 0 AND 100),
+    ADD COLUMN IF NOT EXISTS scroll_moyen_pourcentage DECIMAL(5,2) DEFAULT 0.00 
+        CHECK (scroll_moyen_pourcentage BETWEEN 0 AND 100),
+    
+    -- 💬 INTERACTIONS SOCIALES
+    ADD COLUMN IF NOT EXISTS nombre_mentions INTEGER DEFAULT 0 
+        CHECK (nombre_mentions >= 0),
+    ADD COLUMN IF NOT EXISTS est_tendance BOOLEAN DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS date_tendance TIMESTAMP,
+    
+    -- 🎨 PERSONNALISATION
+    ADD COLUMN IF NOT EXISTS couleur_theme VARCHAR(7),  -- Code couleur hex
+    ADD COLUMN IF NOT EXISTS police_personnalisee VARCHAR(100),
+    ADD COLUMN IF NOT EXISTS mise_en_page VARCHAR(20) DEFAULT 'STANDARD'
+        CHECK (mise_en_page IN ('STANDARD', 'LARGE', 'PLEINE_LARGEUR', 'MAGAZINE')),
+    
+    -- 📅 PLANIFICATION AVANCÉE
+    ADD COLUMN IF NOT EXISTS date_expiration TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS est_evenement BOOLEAN DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS date_evenement TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS lieu_evenement VARCHAR(500),
+    
+    -- 🔄 VERSIONNING
+    ADD COLUMN IF NOT EXISTS version INTEGER DEFAULT 1 CHECK (version >= 1),
+    ADD COLUMN IF NOT EXISTS est_version_courante BOOLEAN DEFAULT TRUE;
+
+
+
+
+    -- =============================================================================
+-- SECTION 18B : TABLES D'INTERACTIVITÉ
+-- =============================================================================
+
+-- 📊 SONDAGES
+CREATE TABLE SONDAGES_ARTICLES (
+    id                  SERIAL PRIMARY KEY,
+    article_id          INTEGER NOT NULL REFERENCES ARTICLES_BLOG_PLATEFORME(id) ON DELETE CASCADE,
+    question            VARCHAR(500) NOT NULL,
+    description         TEXT,
+    type_sondage        VARCHAR(20) DEFAULT 'UNIQUE'
+                        CHECK (type_sondage IN ('UNIQUE', 'MULTIPLE', 'CLASSEMENT', 'NOTE')),
+    date_debut          TIMESTAMP DEFAULT NOW(),
+    date_fin            TIMESTAMP,
+    est_actif           BOOLEAN DEFAULT TRUE,
+    nombre_votes        INTEGER DEFAULT 0 CHECK (nombre_votes >= 0),
+    ordre               INTEGER DEFAULT 0,
+    date_creation       TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE OPTIONS_SONDAGE (
+    id              SERIAL PRIMARY KEY,
+    sondage_id      INTEGER NOT NULL REFERENCES SONDAGES_ARTICLES(id) ON DELETE CASCADE,
+    texte_option    VARCHAR(500) NOT NULL,
+    couleur         VARCHAR(7),
+    image_url       VARCHAR(500),
+    nombre_votes    INTEGER DEFAULT 0 CHECK (nombre_votes >= 0),
+    ordre           INTEGER DEFAULT 0,
+    date_creation   TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE VOTES_SONDAGE (
+    id              SERIAL PRIMARY KEY,
+    sondage_id      INTEGER NOT NULL REFERENCES SONDAGES_ARTICLES(id) ON DELETE CASCADE,
+    option_id       INTEGER NOT NULL REFERENCES OPTIONS_SONDAGE(id) ON DELETE CASCADE,
+    compte_id       INTEGER NOT NULL REFERENCES COMPTES(id) ON DELETE CASCADE,
+    date_vote       TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT unique_vote_sondage UNIQUE (sondage_id, option_id, compte_id)
+);
+
+-- ❓ QUIZ
+CREATE TABLE QUIZ_ARTICLES (
+    id                  SERIAL PRIMARY KEY,
+    article_id          INTEGER NOT NULL REFERENCES ARTICLES_BLOG_PLATEFORME(id) ON DELETE CASCADE,
+    question            VARCHAR(500) NOT NULL,
+    explication         TEXT,
+    type_quiz           VARCHAR(20) DEFAULT 'QCM'
+                        CHECK (type_quiz IN ('QCM', 'VRAI_FAUX', 'REPONSE_COURTE')),
+    points              INTEGER DEFAULT 1 CHECK (points > 0),
+    temps_limite_secondes INTEGER,  -- NULL = pas de limite
+    ordre               INTEGER DEFAULT 0,
+    date_creation       TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE OPTIONS_QUIZ (
+    id              SERIAL PRIMARY KEY,
+    quiz_id         INTEGER NOT NULL REFERENCES QUIZ_ARTICLES(id) ON DELETE CASCADE,
+    texte_option    VARCHAR(500) NOT NULL,
+    est_correcte    BOOLEAN DEFAULT FALSE,
+    feedback        TEXT,  -- Explication après réponse
+    ordre           INTEGER DEFAULT 0
+);
+
+CREATE TABLE REPONSES_QUIZ (
+    id              SERIAL PRIMARY KEY,
+    quiz_id         INTEGER NOT NULL REFERENCES QUIZ_ARTICLES(id) ON DELETE CASCADE,
+    compte_id       INTEGER NOT NULL REFERENCES COMPTES(id) ON DELETE CASCADE,
+    option_id       INTEGER REFERENCES OPTIONS_QUIZ(id) ON DELETE SET NULL,
+    reponse_texte   TEXT,  -- Pour les réponses courtes
+    est_correcte    BOOLEAN,
+    points_obtenus  INTEGER DEFAULT 0,
+    temps_reponse_secondes INTEGER,
+    date_reponse    TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT unique_reponse_quiz UNIQUE (quiz_id, compte_id)
+);
+
+CREATE TABLE SCORES_UTILISATEUR (
+    id              SERIAL PRIMARY KEY,
+    compte_id       INTEGER NOT NULL REFERENCES COMPTES(id) ON DELETE CASCADE,
+    article_id      INTEGER NOT NULL REFERENCES ARTICLES_BLOG_PLATEFORME(id) ON DELETE CASCADE,
+    score_total     INTEGER DEFAULT 0 CHECK (score_total >= 0),
+    score_maximum   INTEGER DEFAULT 0 CHECK (score_maximum >= 0),
+    pourcentage     DECIMAL(5,2) CHECK (pourcentage BETWEEN 0 AND 100),
+    temps_total_secondes INTEGER DEFAULT 0,
+    date_completion TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT unique_score_article UNIQUE (compte_id, article_id)
+);
+
+-- 📝 NOTES DE LECTURE PERSONNELLES
+CREATE TABLE NOTES_LECTURE (
+    id              SERIAL PRIMARY KEY,
+    article_id      INTEGER NOT NULL REFERENCES ARTICLES_BLOG_PLATEFORME(id) ON DELETE CASCADE,
+    compte_id       INTEGER NOT NULL REFERENCES COMPTES(id) ON DELETE CASCADE,
+    contenu_note    TEXT NOT NULL,
+    position_texte  INTEGER,  -- Position dans le texte (caractère)
+    pourcentage_article DECIMAL(5,2),  -- Position en %
+    est_privee      BOOLEAN DEFAULT TRUE,
+    couleur_surlignage VARCHAR(7),
+    date_creation   TIMESTAMP DEFAULT NOW(),
+    date_modification TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT unique_note_position UNIQUE (article_id, compte_id, position_texte)
+);
+
+-- 🔖 SIGNETS/POSITIONS DE LECTURE
+CREATE TABLE SIGNETS_LECTURE (
+    id                  SERIAL PRIMARY KEY,
+    article_id          INTEGER NOT NULL REFERENCES ARTICLES_BLOG_PLATEFORME(id) ON DELETE CASCADE,
+    compte_id           INTEGER NOT NULL REFERENCES COMPTES(id) ON DELETE CASCADE,
+    position_texte      INTEGER,
+    pourcentage         DECIMAL(5,2) CHECK (pourcentage BETWEEN 0 AND 100),
+    titre_signet        VARCHAR(255),
+    note_signet         TEXT,
+    date_creation       TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT unique_signet_article_compte UNIQUE (article_id, compte_id)
+);
+
+-- 🏆 SUCCÈS/BADGES
+CREATE TABLE BADGES_LECTURE (
+    id                  SERIAL PRIMARY KEY,
+    nom_badge           VARCHAR(100) NOT NULL UNIQUE,
+    description_badge   TEXT,
+    icone_badge         VARCHAR(500),
+    condition_sql       TEXT,  -- Condition pour débloquer
+    points_requis       INTEGER DEFAULT 0,
+    date_creation       TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE BADGES_UTILISATEUR (
+    id              SERIAL PRIMARY KEY,
+    compte_id       INTEGER NOT NULL REFERENCES COMPTES(id) ON DELETE CASCADE,
+    badge_id        INTEGER NOT NULL REFERENCES BADGES_LECTURE(id) ON DELETE CASCADE,
+    date_obtention  TIMESTAMP DEFAULT NOW(),
+    progression     DECIMAL(5,2) DEFAULT 100.00,  -- Pour les badges progressifs
+    CONSTRAINT unique_badge_compte UNIQUE (compte_id, badge_id)
+);
+
+-- 📊 ANALYTIQUES DE LECTURE AVANCÉES
+CREATE TABLE ANALYTIQUES_LECTURE (
+    id                      SERIAL PRIMARY KEY,
+    article_id              INTEGER NOT NULL REFERENCES ARTICLES_BLOG_PLATEFORME(id) ON DELETE CASCADE,
+    compte_id               INTEGER REFERENCES COMPTES(id) ON DELETE SET NULL,
+    session_id              VARCHAR(255),
+    temps_passe_secondes    INTEGER DEFAULT 0 CHECK (temps_passe_secondes >= 0),
+    pourcentage_lu          DECIMAL(5,2) CHECK (pourcentage_lu BETWEEN 0 AND 100),
+    scroll_max_pixels       INTEGER DEFAULT 0,
+    sections_lues           INTEGER[] DEFAULT '{}',  -- IDs des sections lues
+    interactions_clics      INTEGER DEFAULT 0 CHECK (interactions_clics >= 0),
+    a_clique_lien           BOOLEAN DEFAULT FALSE,
+    a_partage               BOOLEAN DEFAULT FALSE,
+    a_commente              BOOLEAN DEFAULT FALSE,
+    a_like                  BOOLEAN DEFAULT FALSE,
+    appareil_type           VARCHAR(20),
+    navigateur              VARCHAR(100),
+    taille_ecran            VARCHAR(20),
+    connexion_type          VARCHAR(20),  -- wifi, 4g, etc.
+    date_debut              TIMESTAMP DEFAULT NOW(),
+    date_fin                TIMESTAMP,
+    est_termine             BOOLEAN DEFAULT FALSE
+);
+
+-- 🔗 ARTICLES LIÉS (relations sémantiques)
+CREATE TABLE ARTICLES_LIES (
+    id                  SERIAL PRIMARY KEY,
+    article_id          INTEGER NOT NULL REFERENCES ARTICLES_BLOG_PLATEFORME(id) ON DELETE CASCADE,
+    article_lie_id      INTEGER NOT NULL REFERENCES ARTICLES_BLOG_PLATEFORME(id) ON DELETE CASCADE,
+    type_relation       VARCHAR(30) DEFAULT 'RELIE'
+                        CHECK (type_relation IN ('RELIE', 'SUITE', 'PRECEDENT', 'APPROFONDI', 'RESUME', 'SERIE')),
+    pertinence          DECIMAL(5,2) DEFAULT 100.00 CHECK (pertinence BETWEEN 0 AND 100),
+    description_lien    TEXT,
+    est_manuel          BOOLEAN DEFAULT TRUE,  -- Manuel vs automatique
+    date_creation       TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT unique_lien_articles UNIQUE (article_id, article_lie_id),
+    CONSTRAINT check_pas_meme_article CHECK (article_id != article_lie_id)
+);
+
+-- 📧 NEWSLETTER/ABONNEMENTS PAR EMAIL
+CREATE TABLE NEWSLETTER_ABONNEMENTS (
+    id                  SERIAL PRIMARY KEY,
+    compte_id           INTEGER REFERENCES COMPTES(id) ON DELETE CASCADE,
+    email               VARCHAR(255),
+    frequence           VARCHAR(20) DEFAULT 'HEBDOMADAIRE'
+                        CHECK (frequence IN ('QUOTIDIEN', 'HEBDOMADAIRE', 'MENSUEL', 'INSTANTANE')),
+    categories_filtre   categories_article[],
+    auteurs_filtre      INTEGER[],
+    est_actif           BOOLEAN DEFAULT TRUE,
+    token_confirmation  VARCHAR(255),
+    date_inscription    TIMESTAMP DEFAULT NOW(),
+    date_desinscription TIMESTAMP,
+    CONSTRAINT check_email_ou_compte CHECK (
+        (compte_id IS NOT NULL AND email IS NULL) OR
+        (compte_id IS NULL AND email IS NOT NULL)
+    )
+);
+
+-- 🎯 RECOMMANDATIONS PERSONNALISÉES
+CREATE TABLE RECOMMANDATIONS_ARTICLES (
+    id                  SERIAL PRIMARY KEY,
+    compte_id           INTEGER NOT NULL REFERENCES COMPTES(id) ON DELETE CASCADE,
+    article_id          INTEGER NOT NULL REFERENCES ARTICLES_BLOG_PLATEFORME(id) ON DELETE CASCADE,
+    score_recommendation DECIMAL(5,2) CHECK (score_recommendation BETWEEN 0 AND 100),
+    raison_recommendation TEXT,
+    est_vu              BOOLEAN DEFAULT FALSE,
+    est_clique          BOOLEAN DEFAULT FALSE,
+    date_recommendation TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT unique_reco_compte_article UNIQUE (compte_id, article_id)
+);
+
+-- =============================================================================
+-- VUES INTERACTIVES
+-- =============================================================================
+
+-- Vue des articles avec toutes leurs métriques d'interaction
+CREATE OR REPLACE VIEW VUE_ARTICLES_INTERACTIFS AS
+SELECT 
+    a.*,
+    -- Score d'interaction pondéré
+    (
+        (a.nombre_vues * 1) +
+        (a.nombre_likes * 3) +
+        (a.nombre_commentaires * 5) +
+        (a.nombre_partages * 10) +
+        (a.nombre_favoris * 8)
+    ) as score_interaction,
+    -- Indicateur d'engagement
+    CASE 
+        WHEN (a.nombre_vues + a.nombre_likes + a.nombre_commentaires + a.nombre_partages) > 100 THEN 'TRES_ENGAGEANT'
+        WHEN (a.nombre_vues + a.nombre_likes + a.nombre_commentaires + a.nombre_partages) > 50 THEN 'ENGAGEANT'
+        WHEN (a.nombre_vues + a.nombre_likes + a.nombre_commentaires + a.nombre_partages) > 10 THEN 'MODERE'
+        ELSE 'FAIBLE'
+    END as niveau_engagement,
+    -- Taux de complétion
+    CASE 
+        WHEN a.nombre_vues = 0 THEN 0
+        ELSE ROUND((a.taux_completion::decimal / 100) * 100, 1)
+    END as pourcentage_completion
+FROM ARTICLES_BLOG_PLATEFORME a
+WHERE a.statut = 'PUBLIE' AND a.est_archive = FALSE;
+
+-- Vue des articles tendance
+CREATE OR REPLACE VIEW VUE_ARTICLES_TENDANCE AS
+SELECT 
+    a.*,
+    (
+        SELECT COUNT(*) 
+        FROM STATS_LECTURE_ARTICLES sla 
+        WHERE sla.article_id = a.id 
+        AND sla.date_lecture > NOW() - INTERVAL '24 hours'
+    ) as vues_24h,
+    (
+        SELECT COUNT(*) 
+        FROM LIKES_ARTICLES la 
+        WHERE la.article_id = a.id 
+        AND la.date_like > NOW() - INTERVAL '24 hours'
+    ) as likes_24h,
+    (
+        SELECT COUNT(*) 
+        FROM COMMENTAIRES cm 
+        WHERE cm.article_id = a.id 
+        AND cm.date_creation > NOW() - INTERVAL '24 hours'
+    ) as commentaires_24h
+FROM ARTICLES_BLOG_PLATEFORME a
+WHERE a.statut = 'PUBLIE' AND a.est_archive = FALSE
+ORDER BY (vues_24h * 1 + likes_24h * 3 + commentaires_24h * 5) DESC;
+
+-- Vue des articles pour un utilisateur (avec progression)
+CREATE OR REPLACE VIEW VUE_ARTICLES_POUR_UTILISATEUR AS
+SELECT 
+    a.*,
+    sl.pourcentage_lu as progression,
+    sl.date_lecture as derniere_lecture,
+    CASE WHEN fa.id IS NOT NULL THEN TRUE ELSE FALSE END as est_favori,
+    CASE WHEN la.type_like = 'LIKE' THEN TRUE ELSE FALSE END as est_like,
+    CASE WHEN la.type_like = 'DISLIKE' THEN TRUE ELSE FALSE END as est_dislike,
+    CASE WHEN ab.actif = TRUE THEN TRUE ELSE FALSE END as est_abonne_auteur
+FROM ARTICLES_BLOG_PLATEFORME a
+LEFT JOIN STATS_LECTURE_ARTICLES sl ON sl.article_id = a.id
+LEFT JOIN FAVORIS_ARTICLES fa ON fa.article_id = a.id
+LEFT JOIN LIKES_ARTICLES la ON la.article_id = a.id
+LEFT JOIN ABONNEMENTS_BLOG ab ON ab.type_abonnement = 'AUTEUR' 
+    AND ab.reference_id = a.auteur_id AND ab.actif = TRUE
+WHERE a.statut = 'PUBLIE' AND a.est_archive = FALSE;
+
+-- Vue du tableau de bord auteur
+CREATE OR REPLACE VIEW VUE_TABLEAU_BORD_AUTEUR AS
+SELECT 
+    c.id as auteur_id,
+    c.nom_utilisateur_compte,
+    COUNT(DISTINCT a.id) as total_articles,
+    COUNT(DISTINCT a.id) FILTER (WHERE a.statut = 'PUBLIE') as articles_publies,
+    COUNT(DISTINCT a.id) FILTER (WHERE a.statut = 'BROUILLON') as brouillons,
+    COALESCE(SUM(a.nombre_vues), 0) as total_vues,
+    COALESCE(SUM(a.nombre_likes), 0) as total_likes,
+    COALESCE(SUM(a.nombre_commentaires), 0) as total_commentaires,
+    COALESCE(SUM(a.nombre_partages), 0) as total_partages,
+    COALESCE(SUM(a.nombre_favoris), 0) as total_favoris,
+    ROUND(AVG(a.taux_completion), 1) as taux_completion_moyen,
+    ROUND(AVG(a.temps_lecture_moyen), 0) as temps_lecture_moyen_secondes,
+    COUNT(DISTINCT ab.compte_id) FILTER (WHERE ab.actif = TRUE) as nombre_abonnes
+FROM COMPTES c
+LEFT JOIN ARTICLES_BLOG_PLATEFORME a ON a.auteur_id = c.id
+LEFT JOIN ABONNEMENTS_BLOG ab ON ab.type_abonnement = 'AUTEUR' 
+    AND ab.reference_id = c.id AND ab.actif = TRUE
+GROUP BY c.id, c.nom_utilisateur_compte;
+
+
+-- =============================================================================
+-- TRIGGERS POUR L'INTERACTIVITÉ
+-- =============================================================================
+
+-- Mettre à jour les compteurs après un vote de sondage
+CREATE OR REPLACE FUNCTION fn_update_sondage_counters()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        UPDATE OPTIONS_SONDAGE 
+        SET nombre_votes = nombre_votes + 1 
+        WHERE id = NEW.option_id;
+        
+        UPDATE SONDAGES_ARTICLES 
+        SET nombre_votes = nombre_votes + 1 
+        WHERE id = NEW.sondage_id;
+    ELSIF TG_OP = 'DELETE' THEN
+        UPDATE OPTIONS_SONDAGE 
+        SET nombre_votes = GREATEST(0, nombre_votes - 1) 
+        WHERE id = OLD.option_id;
+        
+        UPDATE SONDAGES_ARTICLES 
+        SET nombre_votes = GREATEST(0, nombre_votes - 1) 
+        WHERE id = OLD.sondage_id;
+    END IF;
+    RETURN COALESCE(NEW, OLD);
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_update_sondage_counters
+    AFTER INSERT OR DELETE ON VOTES_SONDAGE
+    FOR EACH ROW EXECUTE FUNCTION fn_update_sondage_counters();
+
+-- Calculer le score après une réponse au quiz
+CREATE OR REPLACE FUNCTION fn_calculer_score_quiz()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_score_total INTEGER;
+    v_score_max INTEGER;
+    v_temps_total INTEGER;
+BEGIN
+    -- Calculer le score total pour cet article
+    SELECT 
+        COALESCE(SUM(rq.points_obtenus), 0),
+        COALESCE(SUM(q.points), 0),
+        COALESCE(SUM(rq.temps_reponse_secondes), 0)
+    INTO v_score_total, v_score_max, v_temps_total
+    FROM REPONSES_QUIZ rq
+    JOIN QUIZ_ARTICLES q ON q.id = rq.quiz_id
+    WHERE rq.compte_id = NEW.compte_id 
+      AND q.article_id = (
+          SELECT article_id FROM QUIZ_ARTICLES WHERE id = NEW.quiz_id
+      );
+    
+    -- Upsert le score
+    INSERT INTO SCORES_UTILISATEUR 
+        (compte_id, article_id, score_total, score_maximum, pourcentage, temps_total_secondes)
+    VALUES (
+        NEW.compte_id,
+        (SELECT article_id FROM QUIZ_ARTICLES WHERE id = NEW.quiz_id),
+        v_score_total,
+        v_score_max,
+        CASE WHEN v_score_max > 0 THEN ROUND((v_score_total::decimal / v_score_max) * 100, 2) ELSE 0 END,
+        v_temps_total
+    )
+    ON CONFLICT (compte_id, article_id) DO UPDATE SET
+        score_total = v_score_total,
+        score_maximum = v_score_max,
+        pourcentage = CASE WHEN v_score_max > 0 THEN ROUND((v_score_total::decimal / v_score_max) * 100, 2) ELSE 0 END,
+        temps_total_secondes = v_temps_total,
+        date_completion = NOW();
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_calculer_score_quiz
+    AFTER INSERT OR UPDATE ON REPONSES_QUIZ
+    FOR EACH ROW EXECUTE FUNCTION fn_calculer_score_quiz();
+
+-- Vérifier et attribuer des badges
+CREATE OR REPLACE FUNCTION fn_attribuer_badges()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Badge: Premier article lu
+    IF NOT EXISTS (
+        SELECT 1 FROM BADGES_UTILISATEUR 
+        WHERE compte_id = NEW.compte_id AND badge_id = (SELECT id FROM BADGES_LECTURE WHERE nom_badge = 'Premier article lu')
+    ) THEN
+        INSERT INTO BADGES_UTILISATEUR (compte_id, badge_id)
+        SELECT NEW.compte_id, id FROM BADGES_LECTURE WHERE nom_badge = 'Premier article lu';
+    END IF;
+    
+    -- Badge: Lecteur assidu (10 articles)
+    IF (
+        SELECT COUNT(DISTINCT article_id) 
+        FROM ANALYTIQUES_LECTURE 
+        WHERE compte_id = NEW.compte_id AND pourcentage_lu >= 80
+    ) >= 10 THEN
+        INSERT INTO BADGES_UTILISATEUR (compte_id, badge_id)
+        SELECT NEW.compte_id, id FROM BADGES_LECTURE WHERE nom_badge = 'Lecteur assidu'
+        ON CONFLICT DO NOTHING;
+    END IF;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_attribuer_badges
+    AFTER INSERT ON ANALYTIQUES_LECTURE
+    FOR EACH ROW
+    WHEN (NEW.pourcentage_lu >= 80)
+    EXECUTE FUNCTION fn_attribuer_badges();
+
+
+-- =============================================================================
+-- INDEX POUR L'INTERACTIVITÉ
+-- =============================================================================
+
+-- Index pour les tendances
+CREATE INDEX idx_articles_tendance 
+    ON ARTICLES_BLOG_PLATEFORME(est_tendance, date_tendance DESC)
+    WHERE est_tendance = TRUE;
+
+-- Index pour le score d'interaction
+CREATE INDEX idx_articles_interaction 
+    ON ARTICLES_BLOG_PLATEFORME(
+        (nombre_vues * 1 + nombre_likes * 3 + nombre_commentaires * 5 + nombre_partages * 10 + nombre_favoris * 8) DESC
+    )
+    WHERE statut = 'PUBLIE';
+
+-- Index pour les quiz
+CREATE INDEX idx_quiz_article ON QUIZ_ARTICLES(article_id, ordre);
+CREATE INDEX idx_reponses_quiz_compte ON REPONSES_QUIZ(compte_id, quiz_id);
+CREATE INDEX idx_scores_utilisateur ON SCORES_UTILISATEUR(compte_id, score_total DESC);
+
+-- Index pour les notes de lecture
+CREATE INDEX idx_notes_lecture_compte ON NOTES_LECTURE(compte_id, date_creation DESC);
+CREATE INDEX idx_notes_lecture_article ON NOTES_LECTURE(article_id, position_texte);
+
+-- Index pour les signets
+CREATE INDEX idx_signets_compte ON SIGNETS_LECTURE(compte_id, date_creation DESC);
+
+-- Index pour les badges
+CREATE INDEX idx_badges_utilisateur ON BADGES_UTILISATEUR(compte_id, date_obtention DESC);
+
+-- Index pour les analyses de lecture
+CREATE INDEX idx_analytiques_article_date 
+    ON ANALYTIQUES_LECTURE(article_id, date_debut DESC);
+CREATE INDEX idx_analytiques_compte 
+    ON ANALYTIQUES_LECTURE(compte_id, date_debut DESC) 
+    WHERE compte_id IS NOT NULL;
+
+-- Index pour les recommandations
+CREATE INDEX idx_recommandations_compte_vu 
+    ON RECOMMANDATIONS_ARTICLES(compte_id, est_vu, est_clique, score_recommendation DESC);

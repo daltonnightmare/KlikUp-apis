@@ -295,6 +295,15 @@ class CacheService {
       return null;
     }
   }
+
+  /**
+   * Invalider des clés par pattern (alias de delPattern)
+   * @param {string} pattern - Pattern de clés à supprimer
+   * @returns {Promise<number>} - Nombre de clés supprimées
+   */
+  async invalidatePattern(pattern) {
+      return this.delPattern(pattern);
+  }
 }
 
 module.exports = new CacheService();

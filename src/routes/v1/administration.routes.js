@@ -1012,7 +1012,7 @@ router.delete('/demandes/:id/pieces/:pieceId',
 router.post('/boutiques/create',
     authMiddleware.authenticate,
     roleMiddleware.isAdmin(),
-    uploadMiddleware.fields([
+    UploadMiddleware.fields([
         { name: 'logo', maxCount: 1 },
         { name: 'favicon', maxCount: 1 }
     ]),
@@ -1027,7 +1027,25 @@ router.post('/boutiques/create',
     CreationEntreprisePartenaireController.createBoutique.bind(CreationEntreprisePartenaireController)
 );
 
-router.post('/restaurants/create', CreationEntreprisePartenaireController.createRestaurant.bind(CreationEntreprisePartenaireController));
+/**
+ * POST /api/v1/restauration/restaurants
+ * Créer un nouveau restaurant
+ * Body: { nom_restaurant_fast_food, description_restaurant_fast_food?, logo_restaurant?, pourcentage_commission_plateforme?, plateforme_id? }
+ * Auth: Bearer <token> + ADMIN
+ * Réponse: 201 { success, data: restaurant, message }
+ */
+router.post('/restaurants/create',
+    roleMiddleware.isAdmin(),
+    validationMiddleware.validate([
+        body('nom_restaurant_fast_food').notEmpty().trim().isLength({ min: 2, max: 255 }),
+        body('description_restaurant_fast_food').optional().trim(),
+        body('logo_restaurant').optional().isURL(),
+        body('pourcentage_commission_plateforme').optional().isFloat({ min: 0, max: 100 }),
+        body('plateforme_id').optional().isInt()
+    ]),
+    CreationEntreprisePartenaireController.createRestaurant.bind(CreationEntreprisePartenaireController)
+);
+
 /**
  * POST /api/v1/admin/transport/compagnies/create
  * Créer une nouvelle compagnie de transport
@@ -1065,7 +1083,7 @@ router.post('/compagnies/create',
 router.post('/entreprises/create',
     authMiddleware.authenticate,
     roleMiddleware.isAdmin(),
-    uploadMiddleware.fields([
+    UploadMiddleware.fields([
         { name: 'logo', maxCount: 1 },
         { name: 'favicon', maxCount: 1 }
     ]),
